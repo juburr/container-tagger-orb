@@ -1,6 +1,6 @@
 <div align="center">
   <img align="center" width="320" src="assets/logos/container-tagger-orb-v2.png" alt="Container Tagger Orb">
-  <h1>Container Tagger Orb</h1>
+  <h1>CircleCI Container Tagger Orb</h1>
   <i>An orb for automatically tagging container images within CircleCI.</i><br /><br />
 </div>
 
