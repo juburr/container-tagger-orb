@@ -1,0 +1,11 @@
+description: >
+  Sample example description.
+
+usage:
+  version: 2.1
+  orbs:
+    tagger: juburr/container-tagger-orb@0.0.1
+  workflows:
+    use-my-orb:
+      jobs:
+        - tagger/greet

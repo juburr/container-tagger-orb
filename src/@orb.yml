@@ -1,0 +1,9 @@
+version: 2.1
+
+description: >
+  Provides automatic tagging of container images using semantic versioning, releasing several tags at a time.
+
+# This information will be displayed in the orb registry and is not mandatory.
+display:
+  home_url: "https://github.com/juburr/container-tagger-orb"
+  source_url: "https://github.com/juburr/container-tagger-orb"
