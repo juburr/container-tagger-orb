@@ -9,7 +9,7 @@
 This is an orb for automatically tagging container images within your CircleCI pipeline using semantic versioning, allowing you to release multiple tags simultaneously.
 
 <div align="center">
-    <img align="center" width="500" src="assets/tagger-concept.png" alt="Container Tagger Concept">
+    <img align="center" width="500" src="assets/tagger-concept-v2.png" alt="Container Tagger Concept">
 </div>
 
 ### Motivation
