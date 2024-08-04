@@ -1,5 +1,5 @@
 <div align="center">
-  <img align="center" width="320" src="assets/logos/container-tagger-orb.png" alt="Container Tagger Orb">
+  <img align="center" width="320" src="assets/logos/container-tagger-orb-v2.png" alt="Container Tagger Orb">
   <h1>Container Tagger Orb</h1>
   <i>An orb for automatically tagging container images within CircleCI.</i><br /><br />
 </div>
@@ -7,6 +7,10 @@
 [![CircleCI Build Status](https://circleci.com/gh/juburr/container-tagger-orb.svg?style=shield "CircleCI Build Status")](https://circleci.com/gh/juburr/container-tagger-orb) [![CircleCI Orb Version](https://badges.circleci.com/orbs/juburr/container-tagger-orb.svg)](https://circleci.com/developer/orbs/orb/juburr/container-tagger-orb) [![GitHub License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://raw.githubusercontent.com/juburr/container-tagger-orb/master/LICENSE) [![CircleCI Community](https://img.shields.io/badge/community-CircleCI%20Discuss-343434.svg)](https://discuss.circleci.com/c/ecosystem/orbs)
 
 This is an orb for automatically tagging container images within your CircleCI pipeline using semantic versioning, allowing you to release multiple tags simultaneously.
+
+<div align="center">
+    <img align="center" width="500" src="assets/tagger-concept.png" alt="Container Tagger Concept">
+</div>
 
 ### Motivation
 Why is something like this helpful or even necessary?
@@ -17,12 +21,12 @@ Now suppose that next week you want to release an emergency security patch to th
 
 Some projects may also want to maintain an `:edge` tag containing the very latest succesful merges into trunk, allowing you to easily pull down images prior to the next release going out.
 
-This orb will take care of all this!
+This orb will take care of these edge cases and more.
 
 ### Assumptions and Strategy
 
-At the moment, this orb requires that your git tags are semantically versioned. Examples of valid tags include `v2.5.2`, `v2.5.3-rc1`, `v2.5.3-alpha1`, or `v2.5.3-beta`.
+This orb requires that your git tags are semantically versioned. Examples of valid tags include `v2.5.2`, `v2.5.3-rc1`, `v2.5.3-alpha1`, or `v2.5.3-beta4`.
 
-This orb traverses through your project's `git tag` output to automatically determine if the newest version of your software is worthy of receiving tags such as `:latest`, or `:2`.
+This orb traverses through your project's `git tag` list to automatically determine if the newest version of your software is worthy of receiving tags such as `:latest`, or `:2`.
 
-Any merge into `master`, `main`, or `develop` will result in an `:edge` tag being created.
+Any merge into `master`, `main`, or `develop` will result in an `:edge` tag being created, assuming your container build job is within a workflow that builds on non-tags.
