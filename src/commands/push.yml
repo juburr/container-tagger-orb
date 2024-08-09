@@ -1,0 +1,23 @@
+description: >
+  Pushes container images to a registry using a tags file.
+parameters:
+  tags_file:
+    type: string
+    default: tags.txt
+    description: "The file containing the list of tags to apply."
+  target_image:
+    type: string
+    description: "The target image name."
+  tool:
+    type: enum
+    enum: ["buildah", "docker", "podman"]
+    default: docker
+    description: "Container tool to use."
+steps:
+  - run:
+      environment:
+        PARAM_TAGS_FILE: << parameters.tags_file >>
+        PARAM_TARGET_IMAGE: << parameters.target_image >>
+        PARAM_TOOL: << parameters.tool >>
+      name: Push Tagged Images To Registry
+      command: <<include(scripts/push.sh)>>
