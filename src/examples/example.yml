@@ -12,8 +12,9 @@ usage:
       steps:
         - tagger/generate_tags
         - tagger/tag:
-            push: true
             source_image: localimage
+            target_image: ghcr.io/org/repo/image
+        - tagger/push:
             target_image: ghcr.io/org/repo/image
 
   workflows:
