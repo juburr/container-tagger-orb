@@ -1,0 +1,32 @@
+description: >
+  Applies tags to a container image by using a tags file.
+parameters:
+  tags_file:
+    type: string
+    default: tags.txt
+    description: "The file containing the list of tags to apply."
+  push:
+    type: boolean
+    default: false
+    description: "Option to push the newly tagged image to the container registry."
+  source_image:
+    type: string
+    description: "The source image name."
+  target_image:
+    type: string
+    description: "The target image name."
+  tool:
+    type: enum
+    enum: ["buildah", "docker", "podman"]
+    default: docker
+    description: "Container tool to use."
+steps:
+  - run:
+      environment:
+        PARAM_PUSH: << parameters.push >>
+        PARAM_SOURCE_IMAGE: << parameters.source_image >>
+        PARAM_TAGS_FILE: << parameters.tags_file >>
+        PARAM_TARGET_IMAGE: << parameters.target_image >>
+        PARAM_TOOL: << parameters.tool >>
+      name: Apply Tags To Container Image
+      command: <<include(scripts/tag.sh)>>

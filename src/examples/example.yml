@@ -11,6 +11,10 @@ usage:
         - image: cimg/base:stable
       steps:
         - tagger/generate_tags
+        - tagger/tag:
+            push: true
+            source_image: localimage
+            target_image: ghcr.io/org/repo/image
 
   workflows:
     use-my-orb:
