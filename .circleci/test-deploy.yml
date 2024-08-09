@@ -36,6 +36,20 @@ jobs:
               exit 1
             fi
             echo "${TAG}"
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          name: Pull Tiny Image To Re-Tag
+          command: docker pull gcr.io/distroless/static:latest
+      - container-tagger-orb/tag:
+          source_image: gcr.io/distroless/static:latest
+          target_image: mydistroless
+      - run:
+          name: Verify Target Tags Exist
+          command: |
+            while read -r INTAG; do
+              docker image ls mydistroless:$INTAG | grep -v REPOSITORY
+            done < tags.txt
 workflows:
   test-deploy:
     jobs:
