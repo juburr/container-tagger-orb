@@ -1,11 +1,18 @@
 description: >
-  Sample example description.
+  Example of a simple workflow that generates tags.
 
 usage:
   version: 2.1
   orbs:
     tagger: juburr/container-tagger-orb@0.0.1
+  jobs:
+    sign-images:
+      docker:
+        - image: cimg/base:stable
+      steps:
+        - tagger/generate_tags
+
   workflows:
     use-my-orb:
       jobs:
-        - tagger/greet
+        - sign-images
