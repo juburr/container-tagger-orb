@@ -35,6 +35,14 @@ if [[ -z "${TARGET_IMAGE}" ]]; then
     exit 1
 fi
 
+# Pull down source image if it doesn't exist locally
+if "${TOOL}" image inspect "${SOURCE_IMAGE}" > /dev/null 2>&1; then
+    echo "Source image exists locally: ${SOURCE_IMAGE}"
+else
+    echo "Source image does not exist. Attempting to pull: ${SOURCE_IMAGE}..."
+    "${TOOL}" pull "${SOURCE_IMAGE}"
+fi
+
 # Apply all tags
 while read -r TAG; do
     echo "Tagging image: ${TARGET_IMAGE}:${TAG}..."

@@ -38,9 +38,6 @@ jobs:
             echo "${TAG}"
       - setup_remote_docker:
           docker_layer_caching: true
-      - run:
-          name: Pull Tiny Image To Re-Tag
-          command: docker pull gcr.io/distroless/static:latest
       - container-tagger-orb/tag:
           source_image: gcr.io/distroless/static:latest
           target_image: mydistroless

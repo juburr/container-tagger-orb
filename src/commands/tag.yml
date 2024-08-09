@@ -1,10 +1,6 @@
 description: >
   Applies tags to a container image by using a tags file.
 parameters:
-  tags_file:
-    type: string
-    default: tags.txt
-    description: "The file containing the list of tags to apply."
   push:
     type: boolean
     default: false
@@ -12,6 +8,10 @@ parameters:
   source_image:
     type: string
     description: "The source image name."
+  tags_file:
+    type: string
+    default: tags.txt
+    description: "The file containing the list of tags to apply."
   target_image:
     type: string
     description: "The target image name."
