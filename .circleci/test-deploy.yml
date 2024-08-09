@@ -27,7 +27,15 @@ jobs:
       - image: cimg/base:current
     steps:
       - checkout
-      - container-tagger-orb/greet
+      - container-tagger-orb/generate_tags
+      - run:
+          name: Verify Most Specific Tag Exported
+          command: |
+            if [[ -z "${TAG}" ]]; then
+              echo "Expected environment variable TAG to be populated."
+              exit 1
+            fi
+            echo "${TAG}"
 workflows:
   test-deploy:
     jobs:
