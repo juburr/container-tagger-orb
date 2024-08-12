@@ -1,6 +1,10 @@
 description: >
   Applies tags to a container image by using a tags file.
 parameters:
+  append_tags_to_source:
+    type: boolean
+    default: false
+    description: "Option to append each tag to the source images as well."
   push:
     type: boolean
     default: false
@@ -23,6 +27,7 @@ parameters:
 steps:
   - run:
       environment:
+        PARAM_APPEND_TAGS_TO_SOURCE: << parameters.append_tags_to_source >>
         PARAM_PUSH: << parameters.push >>
         PARAM_SOURCE_IMAGE: << parameters.source_image >>
         PARAM_TAGS_FILE: << parameters.tags_file >>
