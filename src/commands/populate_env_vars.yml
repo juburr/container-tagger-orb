@@ -10,8 +10,8 @@ parameters:
     description: "Environment variable to populate the image URI with."
   image_digest_env_var:
     type: env_var_name
-    default: "IMAGE_DIGEST"
-    description: "Environment variable to populate the image digest with."
+    default: "IMAGE_URI_DIGEST"
+    description: "Environment variable to populate the image digest with. Only gets set if your image has been pushed to the registry already."
   tag_env_var:
     type: env_var_name
     default: "TAG"
@@ -20,8 +20,8 @@ steps:
   - run:
       environment:
         PARAM_IMAGE: << parameters.image >>
-        PARAM_IMAGE_DIGEST_ENV_VAR: << parameters.image_digest_env_var >>
         PARAM_IMAGE_URI_ENV_VAR: << parameters.image_uri_env_var >>
+        PARAM_IMAGE_URI_DIGEST_ENV_VAR: << parameters.image_digest_env_var >>
         PARAM_TAG_ENV_VAR: << parameters.tag_env_var >>
       name: Populate Environment Variables
       command: <<include(scripts/populate_env_vars.sh)>>
