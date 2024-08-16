@@ -40,6 +40,7 @@ echo "  TAG_ENV_VAR: ${TAG_ENV_VAR}"
 # ==========================================
 # Compute Values
 # ==========================================
+echo "Computing values..."
 
 MOST_SPECIFIC_TAG=""
 SHORT_REVISION=${CIRCLE_SHA1:0:8}
@@ -53,9 +54,11 @@ elif [ "$CIRCLE_BRANCH" = develop ] || [ "$CIRCLE_BRANCH" = main ] || [ "$CIRCLE
 else
     MOST_SPECIFIC_TAG="dev-${SHORT_REVISION}"
 fi
+echo "  MOST_SPECIFIC_TAG=${MOST_SPECIFIC_TAG}"
 
 # Compute: IMAGE_URI
 IMAGE_URI="${IMAGE}:${MOST_SPECIFIC_TAG}"
+echo "  IMAGE_URI=${IMAGE_URI}"
 
 # Compute: IMAGE_DIGEST
 IMAGE_DIGEST=""
@@ -64,15 +67,20 @@ if command -v crane 1> /dev/null; then
     # While docker inspect returns registry/image@sha256:hash, crane simply returns
     # sha256:hash. We need to add the registry/image@ prefix ourselves.
     DIGEST=$(crane digest "${IMAGE}")
+    echo "  DIGEST=${IMAGE_URI}"
     IMAGE_DIGEST="${IMAGE}@${DIGEST}"
+    echo "  IMAGE_DIGEST=${IMAGE_DIGEST}"
 elif command -v docker 1> /dev/null; then
     echo "  TOOL: docker"
     # When pushing a single image to multiple registries, docker inspect always returns
     # a registry/image@sha256:hash value with the first registry you attempted to use, even if
     # $IMAGE is that of the second registry. Reconstruct the correct value ourselves.
     DIGEST_WITH_REGISTRY=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_URI}")
+    echo "  DIGEST_WITH_REGISTRY=${DIGEST_WITH_REGISTRY}"
     DIGEST=$(echo "${DIGEST_WITH_REGISTRY}" | cut -d '@' -f 2)
+    echo "  DIGEST=${DIGEST}"
     IMAGE_DIGEST="${IMAGE}@${DIGEST}"
+    echo "  IMAGE_DIGEST=${IMAGE_DIGEST}"
 elif [[ -n "${IMAGE_DIGEST_ENV_VAR}" ]]; then
     echo "Requesting ${IMAGE_DIGEST_ENV_VAR} requires that either crane or docker be installed."
     exit 1
@@ -81,13 +89,14 @@ fi
 # ==========================================
 # Export to .bashrc
 # ==========================================
+echo "Exporting values..."
 BASHRC_COUNT=0
 
 # Adds the most specific tag
 #   e.g., export TAG=3.5.3
 if [[ -n "${TAG_ENV_VAR}" ]]; then
     export "${TAG_ENV_VAR}"="${MOST_SPECIFIC_TAG}"
-    echo "export ${TAG_ENV_VAR}=${MOST_SPECIFIC_TAG}" >> "${BASH_ENV}"
+    echo "export ${TAG_ENV_VAR}=${MOST_SPECIFIC_TAG}" | tee -a "${BASH_ENV}"
     ((BASHRC_COUNT++))
 fi
 
@@ -95,7 +104,7 @@ fi
 #   e.g., export IMAGE_URI=ghcr.io/org/repo:3.5.3
 if [[ -n "${IMAGE_URI_ENV_VAR}" ]]; then
     export "${IMAGE_URI_ENV_VAR}"="${IMAGE_URI}"
-    echo "export ${IMAGE_URI_ENV_VAR}=${IMAGE_URI}" >> "${BASH_ENV}"
+    echo "export ${IMAGE_URI_ENV_VAR}=${IMAGE_URI}" | tee -a "${BASH_ENV}"
     ((BASHRC_COUNT++))
 fi
 
@@ -103,7 +112,7 @@ fi
 #   e.g., export IMAGE_DIGEST=ghcr.io/org/repo@sha256:3d2b68dd6fa75bd4419533270698b27ab6a482aa2ac5ddb41435fe1fc1bab75c
 if [[ -n "${IMAGE_DIGEST_ENV_VAR}" ]]; then
     export "${IMAGE_DIGEST_ENV_VAR}"="${IMAGE_DIGEST}"
-    echo "export ${IMAGE_DIGEST_ENV_VAR}=${IMAGE_DIGEST}" >> "${BASH_ENV}"
+    echo "export ${IMAGE_DIGEST_ENV_VAR}=${IMAGE_DIGEST}" | tee -a "${BASH_ENV}"
     ((BASHRC_COUNT++))
 fi
 
