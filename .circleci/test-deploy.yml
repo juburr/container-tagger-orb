@@ -39,6 +39,24 @@ jobs:
             while read -r INTAG; do
               docker image ls mydistroless:$INTAG | grep -v REPOSITORY
             done < tags.txt
+      - container-tagger-orb/populate_env_vars:
+          image: gcr.io/distroless/static
+      - run:
+          name: Verify Environment Variables
+          command: |
+            if [[ -z $TAG ]]; then
+              echo "Expected TAG to be set, but it was not."
+              exit 1
+            fi
+            if [[ -z $IMAGE_URI ]]; then
+              echo "Expected IMAGE_URI to be set, but it was not."
+              exit 1
+            fi
+            if [[ -n $IMAGE_URI_DIGEST ]]; then
+              echo "Expected IMAGE_URI_DIGEST to be blank or unset, but it was present."
+              exit 1
+            fi
+            echo "All environment variables are set correctly."
 workflows:
   test-deploy:
     jobs:
