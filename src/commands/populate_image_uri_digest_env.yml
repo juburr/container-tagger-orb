@@ -1,0 +1,18 @@
+description: >
+  Populates an environment variable with the full image URI and digest.
+parameters:
+  image_uri_env_var:
+    type: env_var_name
+    default: "IMAGE_URI"
+    description: "Environment variable that the image URI is already stored in."
+  image_digest_env_var:
+    type: env_var_name
+    default: "IMAGE_URI_DIGEST"
+    description: "Environment variable to store the image URI digest in."
+steps:
+  - run:
+      environment:
+        PARAM_IMAGE_URI_ENV_VAR: << parameters.image_uri_env_var >>
+        PARAM_IMAGE_URI_DIGEST_ENV_VAR: << parameters.image_digest_env_var >>
+      name: Populate Image URI Digest Environment Variable
+      command: <<include(scripts/populate_image_uri_digest_env.sh)>>

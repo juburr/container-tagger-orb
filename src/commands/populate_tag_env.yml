@@ -1,0 +1,18 @@
+description: >
+  Populates an environment variable with the most specific tag.
+parameters:
+  package:
+    type: string
+    default: ""
+    description: "Optional tag prefix, such as those used in Go monorepos."
+  tag_env_var:
+    type: env_var_name
+    default: "TAG"
+    description: "Environment variable to populate the most specific tag with."
+steps:
+  - run:
+      environment:
+        PARAM_PACKAGE: << parameters.package >>
+        PARAM_TAG_ENV_VAR: << parameters.tag_env_var >>
+      name: Populate Tag Environment Variable
+      command: <<include(scripts/populate_tag_env.sh)>>
