@@ -1,0 +1,22 @@
+description: >
+  Populates an environment variable with the full image URI.
+parameters:
+  image:
+    type: string
+    description: "Base image name to use, without a tag at the end."
+  image_uri_env_var:
+    type: env_var_name
+    default: "IMAGE_URI"
+    description: "Environment variable to store the image URI in."
+  tag_env_var:
+    type: env_var_name
+    default: "TAG"
+    description: "Environment variable that the tag is already stored in."
+steps:
+  - run:
+      environment:
+        PARAM_IMAGE: << parameters.image >>
+        PARAM_IMAGE_URI_ENV_VAR: << parameters.image_uri_env_var >>
+        PARAM_TAG_ENV_VAR: << parameters.tag_env_var >>
+      name: Populate Image URI Environment Variable
+      command: <<include(scripts/populate_image_uri_env.sh)>>
