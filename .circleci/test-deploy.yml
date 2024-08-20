@@ -39,7 +39,7 @@ jobs:
             while read -r INTAG; do
               docker image ls mydistroless:$INTAG | grep -v REPOSITORY
             done < tags.txt
-      - container-tagger-orb/populate_tag_env
+      - container-tagger-orb/populate_tag
       - run:
           name: Verify Environment Variables
           command: |
@@ -48,7 +48,7 @@ jobs:
               exit 1
             fi
             echo "The TAG environment variable was set: ${TAG}"
-      - container-tagger-orb/populate_image_uri_env:
+      - container-tagger-orb/populate_image_uri:
           image: gcr.io/distroless/static
       - run:
           name: Verify Environment Variables
@@ -63,7 +63,7 @@ jobs:
           command: |
             echo "export TAG=latest" >> ${BASH_ENV}
             echo "export IMAGE_URI=gcr.io/distroless/static:latest" >> ${BASH_ENV}
-      - container-tagger-orb/populate_image_uri_digest_env
+      - container-tagger-orb/populate_image_uri_digest
       - run:
           name: Verify Environment Variables
           command: |

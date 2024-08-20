@@ -53,6 +53,18 @@ if command -v crane 1> /dev/null; then
     echo "  IMAGE_DIGEST=${IMAGE_DIGEST}"
 elif command -v docker 1> /dev/null; then
     echo "  TOOL: docker"
+
+    # Docker requires the image to exist locally in order for
+    # the "docker inspect" command to return the digest. It
+    # fails with a hard error otherwise.
+    if docker image inspect "${IMAGE_URI}" > /dev/null 2>&1; then
+        echo "The image exists locally."
+    else
+        echo "The image does not exist locally, but is needed by Docker to compute the digest."
+        echo "Pulling image ${IMAGE_URI}..."
+        docker pull "${IMAGE_URI}"
+    fi
+
     # When pushing a single image to multiple registries, docker inspect always returns
     # a registry/image@sha256:hash value with the first registry you attempted to use, even if
     # $IMAGE is that of the second registry. Reconstruct the correct value ourselves.

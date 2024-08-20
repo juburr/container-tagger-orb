@@ -15,4 +15,4 @@ steps:
         PARAM_PACKAGE: << parameters.package >>
         PARAM_TAG_ENV_VAR: << parameters.tag_env_var >>
       name: Populate Tag Environment Variable
-      command: <<include(scripts/populate_tag_env.sh)>>
+      command: <<include(scripts/populate_tag.sh)>>
