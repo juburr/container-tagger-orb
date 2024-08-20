@@ -15,4 +15,4 @@ steps:
         PARAM_IMAGE_URI_ENV_VAR: << parameters.image_uri_env_var >>
         PARAM_IMAGE_URI_DIGEST_ENV_VAR: << parameters.image_digest_env_var >>
       name: Populate Image URI Digest Environment Variable
-      command: <<include(scripts/populate_image_uri_digest_env.sh)>>
+      command: <<include(scripts/populate_image_uri_digest.sh)>>
