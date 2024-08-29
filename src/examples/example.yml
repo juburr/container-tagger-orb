@@ -1,23 +1,62 @@
 description: >
-  Example of a simple workflow that generates tags.
+  Example of a simple workflow that builds a docker image with automatic tag generation.
 
 usage:
   version: 2.1
+
   orbs:
-    tagger: juburr/container-tagger-orb@0.0.1
+    tagger: juburr/container-tagger-orb@0.7.2
+
+  parameters:
+    docker_version:
+      type: string
+      default: "default"
+
   jobs:
-    sign-images:
+    container_build:
       docker:
         - image: cimg/base:current-22.04
       steps:
-        - tagger/generate_tags
+        - checkout
+        - setup_remote_docker:
+            version: << pipeline.parameters.docker_version >>
+            docker_layer_caching: true
+        - run:
+            name: Build Docker Container
+            command: |
+              # Customize based on the needs of your project
+              # In practice you will likely have many more build arguments, OCI labels, etc.
+              docker build \
+                --build-arg CREATED_ON=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+                --build-arg GITHUB_TOKEN=$GITHUB_TOKEN \
+                --label org.opencontainers.image.source="https://github.com/org/repo" \
+                -t localimage \
+                -f containers/prod/localimage/Dockerfile \
+                .
+        - tagger/generate_tags:
+            outfile: tags.txt
         - tagger/tag:
             source_image: localimage
             target_image: ghcr.io/org/repo/image
+            tags_file: tags.txt
+        - run:
+            name: Authenticate with GHCR
+            command: echo $GITHUB_TOKEN | docker login ghcr.io -u $GITHUB_USER --password-stdin
         - tagger/push:
             target_image: ghcr.io/org/repo/image
+            tags_file: tags.txt
+        - run:
+            name: Logout from GHCR
+            command: docker logout ghcr.io
 
   workflows:
-    use-my-orb:
+    on-tag:
       jobs:
-        - sign-images
+        - container_build:
+            context:
+              - yourproject-github-pkg-rw
+            filters:
+              branches:
+                ignore: /.*/
+              tags:
+                only: /^v(?!0\d)[0-9]+(\.(?!0\d)[0-9]+){2}(\-(rc|alpha|beta)?(?!0\d)[0-9]+)?$/
