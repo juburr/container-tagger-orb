@@ -4,6 +4,7 @@
 # This ensures future steps within the same job have access to it.
 
 set -e
+set +o history
 
 # ==========================================
 # Handle Input 

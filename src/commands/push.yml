@@ -20,4 +20,5 @@ steps:
         PARAM_TARGET_IMAGE: << parameters.target_image >>
         PARAM_TOOL: << parameters.tool >>
       name: Push Tagged Images To Registry
+      shell: /bin/bash
       command: <<include(scripts/push.sh)>>

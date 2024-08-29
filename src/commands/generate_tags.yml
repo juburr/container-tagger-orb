@@ -4,15 +4,16 @@ parameters:
   outfile:
     type: string
     default: tags.txt
-    description: "The file to output the list of tags to."
+    description: The file to output the list of tags to.
   package:
     type: string
     default: ""
-    description: "Optional tag prefix, such as those used in Go monorepos."
+    description: Optional tag prefix, such as those used in Go monorepos.
 steps:
   - run:
       environment:
         PARAM_OUTFILE: << parameters.outfile >>
         PARAM_PACKAGE: << parameters.package >>
       name: Generate Tags
+      shell: /bin/bash
       command: <<include(scripts/generate_tags.sh)>>

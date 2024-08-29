@@ -34,4 +34,5 @@ steps:
         PARAM_TARGET_IMAGE: << parameters.target_image >>
         PARAM_TOOL: << parameters.tool >>
       name: Apply Tags To Container Image
+      shell: /bin/bash
       command: <<include(scripts/tag.sh)>>

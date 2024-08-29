@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+set +o history
 
 # Read command arguments
 APPEND_TAGS_TO_SOURCE="${PARAM_APPEND_TAGS_TO_SOURCE}"
