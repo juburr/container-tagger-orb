@@ -19,4 +19,5 @@ steps:
         PARAM_IMAGE_URI_ENV_VAR: << parameters.image_uri_env_var >>
         PARAM_TAG_ENV_VAR: << parameters.tag_env_var >>
       name: Populate Image URI Environment Variable
+      shell: /bin/bash
       command: <<include(scripts/populate_image_uri.sh)>>

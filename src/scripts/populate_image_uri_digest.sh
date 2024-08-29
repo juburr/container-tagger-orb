@@ -5,6 +5,7 @@
 # have access to it.
 
 set -e
+set +o history
 
 # ==========================================
 # Handle Input 

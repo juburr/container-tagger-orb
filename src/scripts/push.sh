@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+set +o history
 
 # Read command arguments
 TAGS_FILE=$(circleci env subst "${PARAM_TAGS_FILE}")

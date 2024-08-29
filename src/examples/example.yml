@@ -8,7 +8,7 @@ usage:
   jobs:
     sign-images:
       docker:
-        - image: cimg/base:stable
+        - image: cimg/base:current-22.04
       steps:
         - tagger/generate_tags
         - tagger/tag:
