@@ -5,7 +5,6 @@ set +o history
 
 # Read command arguments
 APPEND_TAGS_TO_SOURCE="${PARAM_APPEND_TAGS_TO_SOURCE}"
-PUSH="${PARAM_PUSH}"
 TAGS_FILE=$(circleci env subst "${PARAM_TAGS_FILE}")
 SOURCE_IMAGE=$(circleci env subst "${PARAM_SOURCE_IMAGE}")
 TARGET_IMAGE=$(circleci env subst "${PARAM_TARGET_IMAGE}")
@@ -13,7 +12,6 @@ TOOL="${PARAM_TOOL}"
 
 # Print arguments for debugging purposes
 echo "Running tagger with arguments:"
-echo "  PUSH: ${PUSH}"
 echo "  TAGS_FILE: ${TAGS_FILE}"
 echo "  SOURCE_IMAGE: ${SOURCE_IMAGE}"
 echo "  TARGET_IMAGE: ${TARGET_IMAGE}"
@@ -54,9 +52,4 @@ while read -r TAG; do
 
     echo "Tagging image: ${TARGET_IMAGE}:${TAG}..."
     "${TOOL}" tag "${INNER_SOURCE_IMAGE}" "${TARGET_IMAGE}:${TAG}"
-
-    if [[ "${PUSH}" == "1" ]]; then
-        echo "Pushing image: ${TARGET_IMAGE}:${TAG}..."
-        "${TOOL}" push "${TARGET_IMAGE}:${TAG}"
-    fi
 done < "${TAGS_FILE}"
