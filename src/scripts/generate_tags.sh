@@ -17,6 +17,11 @@ echo "  OUTFILE: ${OUTFILE}"
 echo "  PACKAGE: ${PACKAGE}"
 echo ""
 
+echo "Computing absolute path for output tag file..."
+OUTFILE=$(realpath --no-symlinks "${OUTFILE}")
+echo "  OUTFILE: ${OUTFILE}"
+echo ""
+
 # Reset the output file, in case the script is ran multiple times.
 echo "Truncating ${OUTFILE}..."
 truncate -s 0 "${OUTFILE}"
@@ -87,6 +92,7 @@ else
     echo "  Added tag to output file: dev-${SHORT_REVISION}"
 fi
 echo "  Done."
+echo ""
 
-printf "\nThe following tags were generated:\n"
+echo "The following tags were generated and written to ${OUTFILE}:"
 awk '{print "  :"$1}' "${OUTFILE}"
