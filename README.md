@@ -50,7 +50,7 @@ usage:
   version: 2.1
 
   orbs:
-    tagger: juburr/container-tagger-orb@0.7.2
+    tagger: juburr/container-tagger-orb@0.7.4
 
   parameters:
     docker_version:
