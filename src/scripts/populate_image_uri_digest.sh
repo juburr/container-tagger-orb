@@ -34,7 +34,10 @@ normalize_digest() {
     if [[ "$raw" == *@* ]]; then
         raw="${raw##*@}"
     fi
-    printf '%s' "${raw,,}"
+    # ${var,,} is Bash 4. This command runs with the executor's /bin/bash, which
+    # is still Bash 3.2 on CircleCI macOS. tr is locale-independent for A-Z.
+    raw="$(tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz' <<< "$raw")"
+    printf '%s' "$raw"
 }
 
 valid_digest() {

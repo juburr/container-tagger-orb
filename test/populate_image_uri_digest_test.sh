@@ -33,7 +33,7 @@ DOCKER_ONLY="${TMP}/docker-only"
 NEITHER="${TMP}/neither"
 mkdir -p "$ESSENTIALS" "$BOTH" "$DOCKER_ONLY" "$NEITHER"
 
-for cmd in bash mktemp cat rm; do
+for cmd in bash mktemp cat rm tr; do
   ln -s "$(command -v "$cmd")" "${ESSENTIALS}/${cmd}"
 done
 
