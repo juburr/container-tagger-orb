@@ -39,7 +39,7 @@ This orb requires that your git tags follow semantic versioning. Examples of val
 
 `alpha` and `beta` accept the same suffix shapes as `rc`. A tag pipeline whose git tag is not one of these forms fails, instead of publishing that release as `dev-<sha>` or `edge`.
 
-This orb functions by pulling down your project's `git tag` list to determine which versions already exist.
+This orb functions by reading your project's local `git tag` list to determine which versions already exist. If that list cannot be read, a final release fails instead of treating the tag being built as the newest version. An empty list is a first release and still publishes the floating tags.
 
 Any merge into `master`, `main`, or `develop` will result in an `:edge` tag being created, provided your container build job is within a workflow that builds on non-tagged commits.
 

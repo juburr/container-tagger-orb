@@ -41,7 +41,27 @@ cp "${FAKE_BIN}/circleci" "${CIRCLECI_ONLY}/circleci"
 
 cat > "${FAKE_BIN}/git" << 'EOF'
 #!/usr/bin/env bash
+if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--is-inside-work-tree" ]]; then
+  case "${GIT_WORK_TREE:-true}" in
+    true)
+      printf 'true\n'
+      exit 0
+      ;;
+    false)
+      printf 'false\n'
+      exit 0
+      ;;
+    *)
+      echo "fatal: not a git repository (or any of the parent directories): .git" >&2
+      exit 128
+      ;;
+  esac
+fi
 if [[ "${1:-}" == "tag" && -z "${2:-}" ]]; then
+  if [[ "${GIT_TAG_EXIT:-0}" != "0" ]]; then
+    echo "fatal: detected dubious ownership in repository at '${PWD}'" >&2
+    exit "${GIT_TAG_EXIT}"
+  fi
   if [[ -n "${GIT_TAGS_FILE:-}" && -f "${GIT_TAGS_FILE}" ]]; then
     cat "${GIT_TAGS_FILE}"
   fi
@@ -403,6 +423,10 @@ run_golden_cases() {
   golden "readme hotfix v2.4.8 does not move 2 or latest" \
     "v2.4.8" "" $'2.4.8\n2.4' \
     "v2.4.7" "v2.5.2" "v2.5.1" "v1.9.0"
+
+  golden "backport v4.4.7 does not take latest or the major tag" \
+    "v4.4.7" "" $'4.4.7\n4.4' \
+    "v4.4.6" "v4.5.0" "v5.0.0"
 
   golden "readme head v2.5.2 moves minor, major, and latest" \
     "v2.5.2" "" $'2.5.2\n2.5\n2\nlatest' \
@@ -897,8 +921,93 @@ run_stress_set() {
   done
 }
 
-run_real_git_smoke() {
-  local repo="${TMP}/real-repo"
+assert_history_refused() {
+  local name="$1"
+  local circle_tag="$2"
+  local work_tree="$3"
+  local tag_exit="$4"
+  local tags_file="${TMP}/tags.txt"
+  local outfile="${TMP}/history-out.txt"
+  local log="${outfile}.log"
+  rm -f "$outfile" "$log"
+  # Newer releases are available. If the failed git read is ignored, this tag
+  # becomes the only candidate and takes :latest.
+  printf 'v4.4.6\nv4.5.0\nv5.0.0\n' > "$tags_file"
+  export GIT_WORK_TREE="$work_tree"
+  export GIT_TAG_EXIT="$tag_exit"
+  local status
+  status="$(run_script "$outfile" "$circle_tag" "" "" "$SHA" "$tags_file" "$FAKE_BIN")"
+  unset GIT_WORK_TREE GIT_TAG_EXIT
+  if [[ "$status" -eq 0 ]]; then
+    local actual=""
+    if [[ -f "$outfile" ]]; then
+      actual="$(cat "$outfile")"
+    fi
+    fail_case "$name" "expected a non-zero exit" "tags:" "$actual"
+    return
+  fi
+  if [[ -f "$outfile" ]] && grep -qx 'latest' "$outfile"; then
+    fail_case "$name" "wrote latest from an unreadable history" "$(cat "$outfile")"
+    return
+  fi
+  if [[ -f "$outfile" ]] && grep -qx '4' "$outfile"; then
+    fail_case "$name" "wrote the major tag from an unreadable history" "$(cat "$outfile")"
+    return
+  fi
+  if [[ -f "$outfile" ]] && grep -qx '4.4' "$outfile"; then
+    fail_case "$name" "wrote the minor tag from an unreadable history" "$(cat "$outfile")"
+    return
+  fi
+  if ! grep -F "Refusing to publish latest" "$log" >/dev/null; then
+    fail_case "$name" "missing refusal" "$(cat "$log")"
+    return
+  fi
+  pass_case
+}
+
+run_unreadable_history_cases() {
+  assert_history_refused "git tag failure does not publish latest for v4.4.7" "v4.4.7" "true" "128"
+  assert_history_refused "missing git checkout does not publish latest for v4.4.7" "v4.4.7" "fail" "0"
+  assert_history_refused "not a work tree does not publish latest for v4.4.7" "v4.4.7" "false" "0"
+
+  local tags_file="${TMP}/tags.txt"
+  local outfile="${TMP}/history-out.txt"
+  local status
+  printf 'v5.0.0\n' > "$tags_file"
+  export GIT_WORK_TREE="fail"
+  export GIT_TAG_EXIT="128"
+  status="$(run_script "$outfile" "v4.4.7-rc1" "" "" "$SHA" "$tags_file" "$FAKE_BIN")"
+  unset GIT_WORK_TREE GIT_TAG_EXIT
+  check_output "prerelease does not need tag history" \
+    "$outfile" "${outfile}.log" "$status" "4.4.7-rc1"
+}
+
+# Run generate_tags.sh with the real git binary. env keeps the CircleCI
+# variables out of this shell, which also avoids exporting them from a subshell.
+run_real_git_script() {
+  local dir="$1"
+  local outfile="$2"
+  local circle_tag="$3"
+  local branch="$4"
+  (
+    cd "$dir" || exit 1
+    env \
+      PARAM_OUTFILE="$outfile" \
+      PARAM_PACKAGE="" \
+      CIRCLE_TAG="$circle_tag" \
+      CIRCLE_BRANCH="$branch" \
+      CIRCLE_SHA1="$SHA" \
+      CIRCLE_BUILD_NUM="1" \
+      LC_ALL=C \
+      GIT_PAGER=cat \
+      GIT_TERMINAL_PROMPT=0 \
+      PATH="${CIRCLECI_ONLY}:${ORIGINAL_PATH}" \
+      bash "$SCRIPT" > "${outfile}.log" 2>&1
+  )
+}
+
+init_real_repo() {
+  local repo="$1"
   mkdir -p "$repo"
   "$REAL_GIT" -C "$repo" init -q
   "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
@@ -906,25 +1015,65 @@ run_real_git_smoke() {
   printf 'init\n' > "${repo}/README"
   "$REAL_GIT" -C "$repo" add README
   "$REAL_GIT" -C "$repo" commit -q -m init
+}
+
+run_real_git_history_cases() {
+  local outfile="${TMP}/real-history-out.txt"
+  local status=0
+  local dir="${TMP}/not-a-repo"
+  mkdir -p "$dir"
+  run_real_git_script "$dir" "$outfile" "v4.4.7" "" || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "real git outside a repo refuses v4.4.7" "exit 0" "$(cat "$outfile" 2>/dev/null || true)"
+  elif [[ -f "$outfile" ]] && grep -qx 'latest' "$outfile"; then
+    fail_case "real git outside a repo refuses v4.4.7" "wrote latest" "$(cat "$outfile")"
+  elif ! grep -F "Refusing to publish latest" "${outfile}.log" >/dev/null; then
+    fail_case "real git outside a repo refuses v4.4.7" "missing refusal" "$(cat "${outfile}.log")"
+  else
+    pass_case
+  fi
+
+  local repo="${TMP}/first-release"
+  init_real_repo "$repo"
+  outfile="${TMP}/first-release-out.txt"
+  status=0
+  run_real_git_script "$repo" "$outfile" "v1.0.0" "" || status=$?
+  check_output "real git first release with an empty tag list still publishes latest" \
+    "$outfile" "${outfile}.log" "$status" $'1.0.0\n1.0\n1\nlatest'
+
+  outfile="${TMP}/gitdir-out.txt"
+  status=0
+  run_real_git_script "${repo}/.git" "$outfile" "v4.4.7" "" || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "real git inside .git is not a work tree" "exit 0" "$(cat "$outfile" 2>/dev/null || true)"
+  elif [[ -f "$outfile" ]] && grep -qx 'latest' "$outfile"; then
+    fail_case "real git inside .git is not a work tree" "wrote latest" "$(cat "$outfile")"
+  else
+    pass_case
+  fi
+
+  local backport="${TMP}/backport"
+  init_real_repo "$backport"
+  "$REAL_GIT" -C "$backport" tag v4.4.6
+  "$REAL_GIT" -C "$backport" tag v4.5.0
+  "$REAL_GIT" -C "$backport" tag v5.0.0
+  outfile="${TMP}/backport-out.txt"
+  status=0
+  run_real_git_script "$backport" "$outfile" "v4.4.7" "" || status=$?
+  check_output "real git v4.4.7 backport does not take latest" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4'
+}
+
+run_real_git_smoke() {
+  local repo="${TMP}/real-repo"
+  init_real_repo "$repo"
   "$REAL_GIT" -C "$repo" tag v11.0.0
   "$REAL_GIT" -C "$repo" tag -a v1.8.0 -m "annotated older release"
   "$REAL_GIT" -C "$repo" tag v1.9.0-rc1
 
   local outfile="${TMP}/real-out.txt"
-  local status
-  (
-    cd "$repo"
-    export PARAM_OUTFILE="$outfile"
-    export PARAM_PACKAGE=""
-    export CIRCLE_TAG="v1.9.0"
-    export CIRCLE_BRANCH="main"
-    export CIRCLE_SHA1="$SHA"
-    export CIRCLE_BUILD_NUM="1"
-    export LC_ALL=C
-    export GIT_PAGER=cat
-    export GIT_TERMINAL_PROMPT=0
-    PATH="${CIRCLECI_ONLY}:${ORIGINAL_PATH}" bash "$SCRIPT" > "${outfile}.log" 2>&1
-  ) && status=0 || status=$?
+  local status=0
+  run_real_git_script "$repo" "$outfile" "v1.9.0" "main" || status=$?
   check_output "real git v1.9.0 vs annotated v1.8.0 and v11.0.0" \
     "$outfile" "${outfile}.log" "$status" $'1.9.0\n1.9\n1'
 }
@@ -942,7 +1091,9 @@ main() {
   run_prerelease_matrix
   run_unsupported_tag_cases
   run_populate_tag_cases
+  run_unreadable_history_cases
   run_stress_set
+  run_real_git_history_cases
   run_real_git_smoke
 
   printf 'passed=%s failed=%s\n' "$PASSED" "$FAILED"
