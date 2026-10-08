@@ -43,6 +43,38 @@ truncate -s 0 "${OUTFILE}"
 echo "  Done."
 echo ""
 
+# Read the tag list once and keep its exit status. The old `{ git tag; echo ...; }`
+# group hid a failing `git tag`: echo still succeeded, so the tag being built
+# looked like the only release and took :latest. pipefail does not help, because
+# the group's status is the status of echo. An empty tag list is fine.
+load_git_tags() {
+    local err_file work_tree
+    err_file=$(mktemp)
+    if ! work_tree=$(git rev-parse --is-inside-work-tree 2>"$err_file"); then
+        echo "Error: git cannot read this checkout, so existing release tags cannot be compared."
+        cat "$err_file"
+        echo "Refusing to publish latest, major, or minor tags from an incomplete history."
+        rm -f "$err_file"
+        return 1
+    fi
+    # `rev-parse` exits 0 and prints "false" inside a .git directory. That is
+    # not a checkout this command can trust, even though the command succeeded.
+    if [[ "$work_tree" != "true" ]]; then
+        echo "Error: this directory is not a git work tree, so existing release tags cannot be compared."
+        echo "Refusing to publish latest, major, or minor tags from an incomplete history."
+        rm -f "$err_file"
+        return 1
+    fi
+    if ! GIT_TAGS=$(git tag 2>"$err_file"); then
+        echo "Error: git tag failed, so existing release tags cannot be compared."
+        cat "$err_file"
+        echo "Refusing to publish latest, major, or minor tags from an incomplete history."
+        rm -f "$err_file"
+        return 1
+    fi
+    rm -f "$err_file"
+}
+
 echo "Generating tags:"
 SHORT_REVISION=$(echo "${CIRCLE_SHA1}" | cut -c 1-8)
 echo "  SHORT_REVISION: ${SHORT_REVISION}"
@@ -70,17 +102,24 @@ if [[ -n "${CIRCLE_TAG}" ]]; then
     fi
     echo "  ADDED_TAG: ${ADDED_TAG}"
 
-    HIGHEST_VERSION=$({ git tag; echo "${ADDED_TAG}"; } | grep "^${PACKAGE}" |  sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | sort -r --version-sort | head -n 1)
-    echo "  HIGHEST_VERSION: ${HIGHEST_VERSION}"
-    # Match a whole numeric component. An unescaped "." matches any character,
-    # so "v1." also matched v11 and "v1.2." also matched v1.23.
-    HIGHEST_WITH_SAME_MAJOR=$({ git tag; echo "${ADDED_TAG}"; } | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -E "^v${MAJOR_VER}\.[0-9]+\.[0-9]+$" | sort -r --version-sort | head -n 1)
-    echo "  HIGHEST_WITH_SAME_MAJOR: ${HIGHEST_WITH_SAME_MAJOR}"
-    HIGHEST_WITH_SAME_MINOR=$({ git tag; echo "${ADDED_TAG}"; } | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -E "^v${MAJOR_VER}\.${MINOR_VER}\.[0-9]+$" | sort -r --version-sort | head -n 1)
-    echo "  HIGHEST_WITH_SAME_MINOR: ${HIGHEST_WITH_SAME_MINOR}"
-
     if [[ -z ${PRERELEASE_VER} ]]; then
         echo "  This is a final release. Generating latest, major, and minor tags..."
+        # A pre-release never moves floating tags, so it does not read this list.
+        # An empty list is a first release and still publishes the floating tags.
+        GIT_TAGS=""
+        if ! load_git_tags; then
+            exit 1
+        fi
+
+        HIGHEST_VERSION=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | grep "^${PACKAGE}" |  sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | sort -r --version-sort | head -n 1)
+        echo "  HIGHEST_VERSION: ${HIGHEST_VERSION}"
+        # Match a whole numeric component. An unescaped "." matches any character,
+        # so "v1." also matched v11 and "v1.2." also matched v1.23.
+        HIGHEST_WITH_SAME_MAJOR=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -E "^v${MAJOR_VER}\.[0-9]+\.[0-9]+$" | sort -r --version-sort | head -n 1)
+        echo "  HIGHEST_WITH_SAME_MAJOR: ${HIGHEST_WITH_SAME_MAJOR}"
+        HIGHEST_WITH_SAME_MINOR=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -E "^v${MAJOR_VER}\.${MINOR_VER}\.[0-9]+$" | sort -r --version-sort | head -n 1)
+        echo "  HIGHEST_WITH_SAME_MINOR: ${HIGHEST_WITH_SAME_MINOR}"
+
 
         if [[ ${TAG} == "${HIGHEST_WITH_SAME_MINOR}" ]] ; then
 	        echo "${MAJOR_VER}.${MINOR_VER}" >> "${OUTFILE}"
