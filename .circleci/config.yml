@@ -8,9 +8,21 @@ filters: &filters
   tags:
     only: /.*/
 
+jobs:
+  test-tag-selection:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Run tag selection tests
+          command: bash test/generate_tags_test.sh
+
 workflows:
   lint-pack:
     jobs:
+      - test-tag-selection:
+          filters: *filters
       - orb-tools/lint:
           filters: *filters
       - orb-tools/pack:
@@ -24,5 +36,5 @@ workflows:
           pipeline_number: << pipeline.number >>
           vcs_type: << pipeline.project.type >>
           orb_name: container-tagger-orb
-          requires: [orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
+          requires: [test-tag-selection, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
           filters: *filters
