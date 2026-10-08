@@ -1,5 +1,7 @@
 description: >
-  Populates an environment variable with the full image URI and digest.
+  Populates an environment variable with the repository name and its registry
+  digest, for example ghcr.io/org/repo@sha256:.... Fails when that digest cannot
+  be read. A registry port stays part of the name.
 parameters:
   image_uri_env_var:
     type: env_var_name

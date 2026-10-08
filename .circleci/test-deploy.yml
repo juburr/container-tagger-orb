@@ -67,8 +67,8 @@ jobs:
       - run:
           name: Verify Environment Variables
           command: |
-            if [[ -z $IMAGE_URI_DIGEST ]]; then
-              echo "Expected IMAGE_URI_DIGEST to be set, but it was not."
+            if [[ ! "${IMAGE_URI_DIGEST}" =~ ^gcr.io/distroless/static@sha256:[0-9a-f]{64}$ ]]; then
+              echo "Expected gcr.io/distroless/static@sha256:<64 hex>, got: ${IMAGE_URI_DIGEST}"
               exit 1
             fi
             echo "The IMAGE_URI_DIGEST environment variable was set: ${IMAGE_URI_DIGEST}"

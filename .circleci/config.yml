@@ -17,11 +17,21 @@ jobs:
       - run:
           name: Run tag selection tests
           command: bash test/generate_tags_test.sh
+  test-image-digest:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Run image digest tests
+          command: bash test/populate_image_uri_digest_test.sh
 
 workflows:
   lint-pack:
     jobs:
       - test-tag-selection:
+          filters: *filters
+      - test-image-digest:
           filters: *filters
       - orb-tools/lint:
           filters: *filters
@@ -36,5 +46,5 @@ workflows:
           pipeline_number: << pipeline.number >>
           vcs_type: << pipeline.project.type >>
           orb_name: container-tagger-orb
-          requires: [test-tag-selection, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
+          requires: [test-tag-selection, test-image-digest, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
           filters: *filters
