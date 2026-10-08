@@ -32,8 +32,12 @@ This orb will handle these edge cases and more.
 This orb requires that your git tags follow semantic versioning. Examples of valid tags include:
 - `v2.5.2`
 - `v2.5.3-rc1`
+- `v2.5.3-rc`
+- `v2.5.3-rc.1`
 - `v2.5.3-alpha1`
 - `v2.5.3-beta4`
+
+`alpha` and `beta` accept the same suffix shapes as `rc`. A tag pipeline whose git tag is not one of these forms fails, instead of publishing that release as `dev-<sha>` or `edge`.
 
 This orb functions by pulling down your project's `git tag` list to determine which versions already exist.
 
@@ -104,5 +108,5 @@ usage:
               branches:
                 ignore: /.*/
               tags:
-                only: /^v(?!0\d)[0-9]+(\.(?!0\d)[0-9]+){2}(\-(rc|alpha|beta)?(?!0\d)[0-9]+)?$/
+                only: /^v(?!0\d)[0-9]+(\.(?!0\d)[0-9]+){2}(\-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$/
 ```

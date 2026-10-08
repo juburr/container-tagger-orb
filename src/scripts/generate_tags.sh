@@ -17,6 +17,21 @@ echo "  OUTFILE: ${OUTFILE}"
 echo "  PACKAGE: ${PACKAGE}"
 echo ""
 
+# Supported release tags, after an optional package prefix:
+#   v1.2.3
+#   v1.2.3-rc1, v1.2.3-alpha1, v1.2.3-beta4
+#   v1.2.3-rc, v1.2.3-alpha, v1.2.3-beta
+#   v1.2.3-rc.1, v1.2.3-alpha.1, v1.2.3-beta.2
+# A trailing dot (v1.2.3-rc.) is rejected: that would be an empty identifier.
+TAG="${CIRCLE_TAG#"${PACKAGE}/"}"
+RELEASE_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$'
+if [[ -n "${CIRCLE_TAG}" ]] && [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
+    echo "Error: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag."
+    echo "Expected vMAJOR.MINOR.PATCH with an optional -alpha, -beta, or -rc suffix, for example v2.0.0, v2.0.0-rc1, v2.0.0-rc, or v2.0.0-rc.1."
+    echo "Refusing to publish a dev or edge tag for this tag."
+    exit 1
+fi
+
 echo "Computing absolute path for output tag file..."
 OUTFILE=$(realpath --no-symlinks "${OUTFILE}")
 echo "  OUTFILE: ${OUTFILE}"
@@ -31,11 +46,10 @@ echo ""
 echo "Generating tags:"
 SHORT_REVISION=$(echo "${CIRCLE_SHA1}" | cut -c 1-8)
 echo "  SHORT_REVISION: ${SHORT_REVISION}"
-TAG="${CIRCLE_TAG#"${PACKAGE}/"}"
 echo "  TAG: ${TAG}"
 
-if [[ "$CIRCLE_TAG" =~ v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)[0-9]+)?$ ]]; then
-    echo "  Processing release as a new tag. The CIRCLE_TAG env var contained a valid semantic version."
+if [[ -n "${CIRCLE_TAG}" ]]; then
+    echo "  Processing release as a new tag. The CIRCLE_TAG env var contained a supported release tag."
     echo "${TAG#v}" >> "${OUTFILE}"
     echo "  Added tag to file: ${TAG#v}"
 
@@ -43,8 +57,10 @@ if [[ "$CIRCLE_TAG" =~ v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)[0-9]+)?$ ]]; the
     echo "  MAJOR_VER: ${MAJOR_VER}"
     MINOR_VER=$(echo "${TAG}" | cut -c 2- | cut -d . -f 2)
     echo "  MINOR_VER: ${MINOR_VER}"
-    if [[ "${TAG}" =~ -(alpha|beta|rc)[0-9]+$ ]]; then
-        PRERELEASE_VER=$(echo "${TAG}" | cut -d '-' -f 2 | cut -c 3-)
+    PRERELEASE_VER=""
+    PRERELEASE_RE='-(alpha|beta|rc)([0-9]+|\.[0-9]+)?$'
+    if [[ "${TAG}" =~ $PRERELEASE_RE ]]; then
+        PRERELEASE_VER="${BASH_REMATCH[0]#-}"
     fi
     echo "  PRERELEASE_VER: ${PRERELEASE_VER}"
 

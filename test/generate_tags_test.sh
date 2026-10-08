@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tag selection battery for src/scripts/generate_tags.sh.
+# Tag selection battery for src/scripts/generate_tags.sh and populate_tag.sh.
 #
 # Golden cases are the spec, including the reported floating-tag failures:
 #   v1.9.0 with v11.0.0 present must emit 1.9.0, 1.9, and 1
@@ -168,7 +168,9 @@ is_prerelease() {
   [[ "$body" == *-* ]] || return 1
   version="${body%%-*}"
   suffix="${body#*-}"
-  [[ "$suffix" =~ ^(alpha|beta|rc)[0-9]+$ ]] || return 1
+  # alpha, alpha1, alpha.1, and the same three shapes for beta and rc.
+  # A trailing dot (rc.) is not a pre-release: the numeric identifier would be empty.
+  [[ "$suffix" =~ ^(alpha|beta|rc)([0-9]+|\.[0-9]+)?$ ]] || return 1
   IFS=. read -r major minor patch <<< "$version"
   [[ -n "$major" && -n "$minor" && -n "${patch:-}" ]] || return 1
   [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]] || return 1
@@ -412,6 +414,22 @@ run_golden_cases() {
   golden "readme prerelease rc1 does not move floating tags" \
     "v2.5.3-rc1" "" "2.5.3-rc1" \
     "v2.5.2" "v2.5.3"
+
+  golden "bare rc prerelease does not move floating tags" \
+    "v2.0.0-rc" "" "2.0.0-rc" \
+    "v2.0.0" "v11.0.0" "v2.0.0-rc1"
+
+  golden "dotted rc.1 prerelease does not move floating tags" \
+    "v2.0.0-rc.1" "" "2.0.0-rc.1" \
+    "v1.9.0" "v2.0.0-rc" "v2.0.0"
+
+  golden "bare and dotted prereleases do not block a final release" \
+    "v2.0.0" "" $'2.0.0\n2.0\n2\nlatest' \
+    "v2.0.0-rc" "v2.0.0-rc.1" "v2.0.0-alpha" "v2.1.0-beta.1"
+
+  golden "monorepo dotted prerelease stays on the exact tag" \
+    "services/auth/v2.0.0-rc.1" "services/auth" "2.0.0-rc.1" \
+    "services/auth/v2.0.0" "services/billing/v9.0.0" "v3.0.0"
 
   golden "readme prerelease alpha1 does not move floating tags" \
     "v2.5.3-alpha1" "" "2.5.3-alpha1"
@@ -694,7 +712,167 @@ run_prerelease_matrix() {
         "prerelease ${kind}${number} alone" \
         "v4.5.6-${kind}${number}" ""
     done
+    check_against_oracle \
+      "bare prerelease ${kind} with a final present" \
+      "v4.5.6-${kind}" "" \
+      "v4.5.5" "v4.5.6" "v9.0.0"
+    check_against_oracle \
+      "bare prerelease ${kind} alone" \
+      "v4.5.6-${kind}" ""
+    for number in 0 1 2 10; do
+      check_against_oracle \
+        "dotted prerelease ${kind}.${number} with a lower final" \
+        "v4.5.6-${kind}.${number}" "" \
+        "v4.5.5" "v4.5.6" "v9.0.0"
+      check_against_oracle \
+        "dotted prerelease ${kind}.${number} alone" \
+        "v4.5.6-${kind}.${number}" ""
+    done
   done
+}
+
+check_unsupported() {
+  local name="$1"
+  local circle_tag="$2"
+  local package="$3"
+  local branch="$4"
+  local tags_file="${TMP}/tags.txt"
+  local outfile="${TMP}/reject-out.txt"
+  local log="${outfile}.log"
+  rm -f "$outfile" "$log"
+  printf 'v1.2.3\nv2.0.0\n' > "$tags_file"
+  local status
+  status="$(run_script "$outfile" "$circle_tag" "$package" "$branch" "$SHA" "$tags_file" "$FAKE_BIN")"
+  if [[ "$status" -eq 0 ]]; then
+    local actual=""
+    if [[ -f "$outfile" ]]; then
+      actual="$(cat "$outfile")"
+    fi
+    fail_case "$name" "expected a non-zero exit" "tags:" "$actual"
+    return
+  fi
+  if [[ -f "$outfile" ]]; then
+    local actual
+    actual="$(cat "$outfile")"
+    if [[ -n "$actual" ]]; then
+      fail_case "$name" "wrote tags after rejecting the release" "$actual"
+      return
+    fi
+  fi
+  if ! grep -F "CIRCLE_TAG '${circle_tag}' is not a supported release tag." "$log" >/dev/null; then
+    fail_case "$name" "missing unsupported-tag error" "$(cat "$log")"
+    return
+  fi
+  if grep -F "Added tag to output file: dev-" "$log" >/dev/null || grep -F "Added tag to output file: edge" "$log" >/dev/null; then
+    fail_case "$name" "fell through to a branch tag" "$(cat "$log")"
+    return
+  fi
+  pass_case
+}
+
+run_unsupported_tag_cases() {
+  local tag branch
+  for tag in \
+    "v2.0.0-rc." \
+    "v2.0.0-rc.1.2" \
+    "v2.0.0-alpha.beta" \
+    "v2.0.0-preview.1" \
+    "v2.0.0-1" \
+    "v2.0.0+build" \
+    "v2.0.0-RC1" \
+    "v2" \
+    "v2.0" \
+    "2.0.0" \
+    "nightly"
+  do
+    check_unsupported "reject ${tag} on a tag pipeline" "$tag" "" ""
+    check_unsupported "reject ${tag} even when branch is main" "$tag" "" "main"
+  done
+
+  check_unsupported "reject monorepo tag with an empty pre-release identifier" \
+    "services/auth/v2.0.0-rc." "services/auth" ""
+  check_unsupported "reject monorepo preview tag" \
+    "services/auth/v2.0.0-preview.1" "services/auth" "main"
+  check_unsupported "reject monorepo tag that is not a version" \
+    "services/auth/nightly" "services/auth" ""
+
+  local tags_file="${TMP}/tags.txt"
+  local outfile="${TMP}/out.txt"
+  local status expected
+  printf 'v2.0.0\nv2.0.0-rc\n' > "$tags_file"
+  expected="$(oracle_lines "v2.0.0-rc.1" "" "v2.0.0" "v2.0.0-rc")"
+  status="$(run_script "$outfile" "v2.0.0-rc.1" "" "main" "$SHA" "$tags_file" "$FAKE_BIN")"
+  check_output "dotted prerelease on main does not publish edge" \
+    "$outfile" "${outfile}.log" "$status" "$expected"
+
+  expected="$(oracle_lines "v2.0.0-rc" "" "v2.0.0")"
+  status="$(run_script "$outfile" "v2.0.0-rc" "" "" "$SHA" "$tags_file" "$FAKE_BIN")"
+  check_output "bare rc on an empty branch does not publish dev" \
+    "$outfile" "${outfile}.log" "$status" "$expected"
+
+  expected="$(oracle_lines "services/auth/v2.0.0-alpha" "services/auth" "services/auth/v2.0.0")"
+  printf 'services/auth/v2.0.0\nservices/billing/v9.9.9\n' > "$tags_file"
+  status="$(run_script "$outfile" "services/auth/v2.0.0-alpha" "services/auth" "main" "$SHA" "$tags_file" "$FAKE_BIN")"
+  check_output "monorepo bare alpha does not publish edge" \
+    "$outfile" "${outfile}.log" "$status" "$expected"
+}
+
+check_populate() {
+  local name="$1"
+  local circle_tag="$2"
+  local package="$3"
+  local branch="$4"
+  local expected_status="$5"
+  local expected_value="$6"
+  local bash_env="${TMP}/bash.env"
+  local log="${TMP}/populate.log"
+  rm -f "$bash_env" "$log"
+  export PARAM_PACKAGE="$package"
+  export PARAM_TAG_ENV_VAR="TAG"
+  export CIRCLE_TAG="$circle_tag"
+  export CIRCLE_BRANCH="$branch"
+  export CIRCLE_SHA1="$SHA"
+  export CIRCLE_BUILD_NUM="1"
+  export BASH_ENV="$bash_env"
+  export LC_ALL=C
+  local status=0
+  PATH="${FAKE_BIN}:${ORIGINAL_PATH}" bash "${ROOT}/src/scripts/populate_tag.sh" >"$log" 2>&1 || status=$?
+  if [[ "$status" -ne "$expected_status" ]]; then
+    fail_case "$name" "exit ${status}, expected ${expected_status}" "$(cat "$log")"
+    return
+  fi
+  local actual=""
+  if [[ -f "$bash_env" ]]; then
+    actual="$(cat "$bash_env")"
+  fi
+  if [[ "$expected_status" -eq 0 ]]; then
+    local expected_line="export TAG=${expected_value}"
+    if [[ "$actual" != "$expected_line" ]]; then
+      fail_case "$name" "expected env:" "$expected_line" "actual:" "$actual"
+      return
+    fi
+  elif [[ -n "$actual" ]]; then
+    fail_case "$name" "wrote an env assignment for a rejected tag" "$actual"
+    return
+  elif ! grep -F "not a supported release tag" "$log" >/dev/null; then
+    fail_case "$name" "missing unsupported-tag error" "$(cat "$log")"
+    return
+  fi
+  pass_case
+}
+
+run_populate_tag_cases() {
+  check_populate "populate exact final" "v2.0.0" "" "" 0 "2.0.0"
+  check_populate "populate rc1" "v2.0.0-rc1" "" "" 0 "2.0.0-rc1"
+  check_populate "populate bare rc" "v2.0.0-rc" "" "" 0 "2.0.0-rc"
+  check_populate "populate dotted rc.1" "v2.0.0-rc.1" "" "main" 0 "2.0.0-rc.1"
+  check_populate "populate monorepo alpha.2" "services/auth/v2.0.0-alpha.2" "services/auth" "" 0 "2.0.0-alpha.2"
+  check_populate "populate trunk edge sha when there is no tag" "" "" "main" 0 "main-${SHORT_SHA}"
+  check_populate "populate dev sha when there is no tag" "" "" "feature/xyz" 0 "dev-${SHORT_SHA}"
+  check_populate "populate rejects v2.0.0-rc." "v2.0.0-rc." "" "" 1 ""
+  check_populate "populate rejects preview.1 on main" "v2.0.0-preview.1" "" "main" 1 ""
+  check_populate "populate rejects nightly" "nightly" "" "" 1 ""
+  check_populate "populate rejects a bad monorepo tag" "services/auth/v2.0.0-rc." "services/auth" "main" 1 ""
 }
 
 run_stress_set() {
@@ -762,6 +940,8 @@ main() {
   run_head_matrix
   run_monorepo_matrix
   run_prerelease_matrix
+  run_unsupported_tag_cases
+  run_populate_tag_cases
   run_stress_set
   run_real_git_smoke
 
