@@ -480,18 +480,24 @@ run_failure_cases() {
     pass_case
   fi
 
+  # chmod a-w does not stop root: uid 0 bypasses the mode bits. A directory
+  # cannot be opened for append by any user, so the write fails either way.
   clear_tool_env
   reset_outputs
-  chmod a-w "$BASH_ENV_FILE"
+  local env_dir="${TMP}/bash-env-is-a-directory"
+  mkdir -p "$env_dir"
   CRANE_STDOUT="sha256:${SHA256}"
-  status="$(run_script "$BOTH" "IMAGE_URI" "$uri" "IMAGE_URI_DIGEST")"
-  chmod u+w "$BASH_ENV_FILE"
+  export BASH_ENV="$env_dir"
+  status="$(run_script "$BOTH" "IMAGE_URI" "$uri" "IMAGE_URI_DIGEST" keep)"
+  unset BASH_ENV
   if [[ "$status" -eq 0 ]]; then
     fail_case "unwritable BASH_ENV" "exit 0" "$(cat "$LOG")"
   elif ! grep -F "export IMAGE_URI_DIGEST=" "$LOG" >/dev/null; then
     fail_case "unwritable BASH_ENV" "did not reach the export" "$(cat "$LOG")"
   elif grep -F 'Done setting environment variable.' "$LOG" >/dev/null; then
     fail_case "unwritable BASH_ENV still finished" "$(cat "$LOG")"
+  elif [[ -n "$(ls -A "$env_dir")" ]]; then
+    fail_case "unwritable BASH_ENV" "wrote into the directory" "$(ls -A "$env_dir")"
   elif ! assert_unchanged_env "unwritable BASH_ENV"; then
     :
   else
