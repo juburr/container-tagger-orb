@@ -26,9 +26,18 @@ echo "Computing value..."
 
 MOST_SPECIFIC_TAG=""
 SHORT_REVISION=${CIRCLE_SHA1:0:8}
+TAG="${CIRCLE_TAG#"${PACKAGE}/"}"
+RELEASE_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$'
 
-if [[ "$CIRCLE_TAG" =~ v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)[0-9]+)?$ ]]; then
-    TAG="${CIRCLE_TAG#"${PACKAGE}/"}"
+# Same supported forms as generate_tags: v1.2.3, v1.2.3-rc1, v1.2.3-rc, v1.2.3-rc.1.
+if [[ -n "${CIRCLE_TAG}" ]] && [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
+    echo "Error: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag."
+    echo "Expected vMAJOR.MINOR.PATCH with an optional -alpha, -beta, or -rc suffix, for example v2.0.0, v2.0.0-rc1, v2.0.0-rc, or v2.0.0-rc.1."
+    echo "Refusing to publish a dev or edge tag for this tag."
+    exit 1
+fi
+
+if [[ -n "${CIRCLE_TAG}" ]]; then
     MOST_SPECIFIC_TAG="${TAG#v}"
 elif [ "$CIRCLE_BRANCH" = develop ] || [ "$CIRCLE_BRANCH" = main ] || [ "$CIRCLE_BRANCH" = master ]; then
     MOST_SPECIFIC_TAG="${CIRCLE_BRANCH}-${SHORT_REVISION}"
