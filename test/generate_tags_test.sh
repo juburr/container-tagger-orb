@@ -1,0 +1,774 @@
+#!/usr/bin/env bash
+# Tag selection battery for src/scripts/generate_tags.sh.
+#
+# Golden cases are the spec, including the reported floating-tag failures:
+#   v1.9.0 with v11.0.0 present must emit 1.9.0, 1.9, and 1
+#   v1.2.9 with v1.23.0 present must emit 1.2.9 and 1.2
+# An independent numeric oracle checks those goldens, then a generated matrix
+# and a large tag set compare the script to that oracle.
+#
+# Run from a checkout:
+#   bash test/generate_tags_test.sh
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT="${ROOT}/src/scripts/generate_tags.sh"
+ORIGINAL_PATH="${PATH}"
+REAL_GIT="$(command -v git)"
+SHA="0123456789abcdef0123456789abcdef01234567"
+SHORT_SHA="${SHA:0:8}"
+ALT_SHA="abcdef0000000000000000000000000000000000"
+ALT_SHORT="${ALT_SHA:0:8}"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+FAKE_BIN="${TMP}/fake-bin"
+CIRCLECI_ONLY="${TMP}/circleci-only"
+mkdir -p "$FAKE_BIN" "$CIRCLECI_ONLY"
+
+cat > "${FAKE_BIN}/circleci" << 'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "env" && "${2:-}" == "subst" ]]; then
+  printf '%s\n' "${3-}"
+  exit 0
+fi
+printf 'unexpected circleci invocation: %s\n' "$*" >&2
+exit 1
+EOF
+cp "${FAKE_BIN}/circleci" "${CIRCLECI_ONLY}/circleci"
+
+cat > "${FAKE_BIN}/git" << 'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "tag" && -z "${2:-}" ]]; then
+  if [[ -n "${GIT_TAGS_FILE:-}" && -f "${GIT_TAGS_FILE}" ]]; then
+    cat "${GIT_TAGS_FILE}"
+  fi
+  exit 0
+fi
+printf 'unexpected git invocation: %s\n' "$*" >&2
+exit 1
+EOF
+chmod +x "${FAKE_BIN}/circleci" "${FAKE_BIN}/git" "${CIRCLECI_ONLY}/circleci"
+
+PASSED=0
+FAILED=0
+FAILURE_DETAILS=0
+MAX_FAILURE_DETAILS=25
+
+fail_case() {
+  local name="$1"
+  shift
+  FAILED=$((FAILED + 1))
+  if [[ "$FAILURE_DETAILS" -lt "$MAX_FAILURE_DETAILS" ]]; then
+    FAILURE_DETAILS=$((FAILURE_DETAILS + 1))
+    printf 'FAIL %s\n' "$name"
+    printf '  %s\n' "$@"
+  elif [[ "$FAILURE_DETAILS" -eq "$MAX_FAILURE_DETAILS" ]]; then
+    FAILURE_DETAILS=$((FAILURE_DETAILS + 1))
+    printf 'Further failures are counted without a full diff.\n'
+  fi
+}
+
+pass_case() {
+  PASSED=$((PASSED + 1))
+}
+
+version_cmp() {
+  local a1 a2 a3 b1 b2 b3
+  IFS=. read -r a1 a2 a3 <<< "${1#v}"
+  IFS=. read -r b1 b2 b3 <<< "${2#v}"
+  if ((10#$a1 != 10#$b1)); then
+    if ((10#$a1 > 10#$b1)); then
+      printf '1\n'
+    else
+      printf -- '-1\n'
+    fi
+    return
+  fi
+  if ((10#$a2 != 10#$b2)); then
+    if ((10#$a2 > 10#$b2)); then
+      printf '1\n'
+    else
+      printf -- '-1\n'
+    fi
+    return
+  fi
+  if ((10#$a3 != 10#$b3)); then
+    if ((10#$a3 > 10#$b3)); then
+      printf '1\n'
+    else
+      printf -- '-1\n'
+    fi
+    return
+  fi
+  printf '0\n'
+}
+
+max_version() {
+  local best="" candidate cmp
+  for candidate in "$@"; do
+    if [[ -z "$best" ]]; then
+      best="$candidate"
+      continue
+    fi
+    cmp="$(version_cmp "$candidate" "$best")"
+    if [[ "$cmp" -eq 1 ]]; then
+      best="$candidate"
+    fi
+  done
+  printf '%s' "$best"
+}
+
+normalize_repo_tag() {
+  local raw="$1"
+  local package="$2"
+  [[ -n "$raw" ]] || return 1
+  if [[ -n "$package" ]]; then
+    [[ "$raw" == "$package"* ]] || return 1
+    raw="${raw/"${package}/"/}"
+  fi
+  printf '%s' "$raw"
+}
+
+local_tag_from_circle_tag() {
+  local circle_tag="$1"
+  local package="$2"
+  printf '%s' "${circle_tag#"${package}/"}"
+}
+
+added_tag_for() {
+  local circle_tag="$1"
+  local package="$2"
+  local tag
+  tag="$(local_tag_from_circle_tag "$circle_tag" "$package")"
+  if [[ -n "$package" ]]; then
+    printf '%s' "${package}/${tag}"
+  else
+    printf '%s' "$tag"
+  fi
+}
+
+is_final_semver() {
+  local body major minor patch extra
+  [[ "$1" == v* ]] || return 1
+  body="${1#v}"
+  extra=""
+  IFS=. read -r major minor patch extra <<< "$body"
+  [[ -n "$major" && -n "$minor" && -n "${patch:-}" && -z "${extra:-}" ]] || return 1
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]] || return 1
+  [[ "$body" == "${major}.${minor}.${patch}" ]]
+}
+
+is_prerelease() {
+  local body version suffix major minor patch
+  [[ "$1" == v* ]] || return 1
+  body="${1#v}"
+  [[ "$body" == *-* ]] || return 1
+  version="${body%%-*}"
+  suffix="${body#*-}"
+  [[ "$suffix" =~ ^(alpha|beta|rc)[0-9]+$ ]] || return 1
+  IFS=. read -r major minor patch <<< "$version"
+  [[ -n "$major" && -n "$minor" && -n "${patch:-}" ]] || return 1
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]] || return 1
+  [[ "$version" == "${major}.${minor}.${patch}" ]]
+}
+
+collect_finals() {
+  local circle_tag="$1"
+  local package="$2"
+  shift 2
+  local raw norm
+  local -a inputs=()
+  if [[ "$#" -gt 0 ]]; then
+    inputs=("$@")
+  fi
+  inputs+=("$(added_tag_for "$circle_tag" "$package")")
+  local -a finals=()
+  for raw in "${inputs[@]}"; do
+    if ! norm="$(normalize_repo_tag "$raw" "$package")"; then
+      continue
+    fi
+    if is_final_semver "$norm"; then
+      finals+=("$norm")
+    fi
+  done
+  if [[ "${#finals[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  printf '%s\n' "${finals[@]}"
+}
+
+oracle_lines() {
+  local circle_tag="$1"
+  local package="$2"
+  shift 2
+  local tag major minor highest highest_major highest_minor
+  local -a same_major=() same_minor=() finals=()
+  tag="$(local_tag_from_circle_tag "$circle_tag" "$package")"
+  major="$(printf '%s' "$tag" | cut -c 2- | cut -d . -f 1)"
+  minor="$(printf '%s' "$tag" | cut -c 2- | cut -d . -f 2)"
+
+  local -a lines=()
+  lines+=("${tag#v}")
+  if is_prerelease "$tag"; then
+    printf '%s\n' "${lines[@]}"
+    return
+  fi
+
+  mapfile -t finals < <(collect_finals "$circle_tag" "$package" "$@")
+  highest="$(max_version "${finals[@]}")"
+  local candidate candidate_body candidate_major candidate_minor
+  for candidate in "${finals[@]}"; do
+    candidate_body="${candidate#v}"
+    candidate_major="$(printf '%s' "$candidate_body" | cut -d . -f 1)"
+    candidate_minor="$(printf '%s' "$candidate_body" | cut -d . -f 2)"
+    if [[ "$candidate_major" == "$major" ]]; then
+      same_major+=("$candidate")
+    fi
+    if [[ "$candidate_major" == "$major" && "$candidate_minor" == "$minor" ]]; then
+      same_minor+=("$candidate")
+    fi
+  done
+  highest_major="$(max_version "${same_major[@]}")"
+  highest_minor="$(max_version "${same_minor[@]}")"
+
+  if [[ "$tag" == "$highest_minor" ]]; then
+    lines+=("${major}.${minor}")
+  fi
+  if [[ "$tag" == "$highest_major" ]]; then
+    lines+=("${major}")
+  fi
+  if [[ "$tag" == "$highest" ]]; then
+    lines+=("latest")
+  fi
+  printf '%s\n' "${lines[@]}"
+}
+
+assert_sort_agrees_with_oracle() {
+  local -a samples=(
+    v0.9.0 v0.10.0 v1.2.9 v1.2.10 v1.9.0 v1.10.0 v1.23.0
+    v2.0.0 v2.9.0 v2.10.0 v8.9.10 v8.10.0 v10.2.0 v10.20.1
+    v11.0.0 v18.0.1 v99.0.0 v100.0.1 v102.3.4
+  )
+  local sorted oracle
+  mapfile -t sorted < <(printf '%s\n' "${samples[@]}" | LC_ALL=C sort -r --version-sort)
+  oracle="$(max_version "${samples[@]}")"
+  if [[ "${sorted[0]}" != "$oracle" ]]; then
+    printf 'version sort and the numeric oracle disagree: sort=%s oracle=%s\n' "${sorted[0]}" "$oracle" >&2
+    exit 1
+  fi
+}
+
+run_script() {
+  local outfile="$1"
+  local circle_tag="$2"
+  local package="$3"
+  local branch="$4"
+  local sha="$5"
+  local tags_file="$6"
+  local path_prefix="$7"
+  local log="${outfile}.log"
+
+  export GIT_TAGS_FILE="$tags_file"
+  export PARAM_OUTFILE="$outfile"
+  export PARAM_PACKAGE="$package"
+  export CIRCLE_TAG="$circle_tag"
+  export CIRCLE_BRANCH="$branch"
+  export CIRCLE_SHA1="$sha"
+  export CIRCLE_BUILD_NUM="1"
+  export LC_ALL=C
+
+  local status=0
+  PATH="${path_prefix}:${ORIGINAL_PATH}" bash "$SCRIPT" >"$log" 2>&1 || status=$?
+  printf '%s' "$status"
+}
+
+check_output() {
+  local name="$1"
+  local outfile="$2"
+  local log="$3"
+  local status="$4"
+  local expected="$5"
+
+  if [[ "$status" -ne 0 ]]; then
+    fail_case "$name" "script exited ${status}" "$(tail -n 20 "$log")"
+    return
+  fi
+  local actual
+  actual="$(cat "$outfile")"
+  if [[ "$actual" != "$expected" ]]; then
+    fail_case "$name" "expected:" "$expected" "actual:" "$actual"
+    return
+  fi
+  pass_case
+}
+
+check_release() {
+  local name="$1"
+  local circle_tag="$2"
+  local package="$3"
+  local expected="$4"
+  shift 4
+  local tags_file="${TMP}/tags.txt"
+  local outfile="${TMP}/out.txt"
+  : > "$tags_file"
+  if [[ "$#" -gt 0 ]]; then
+    printf '%s\n' "$@" > "$tags_file"
+  fi
+  local status
+  status="$(run_script "$outfile" "$circle_tag" "$package" "" "$SHA" "$tags_file" "$FAKE_BIN")"
+  check_output "$name" "$outfile" "${outfile}.log" "$status" "$expected"
+}
+
+check_release_twice() {
+  local name="$1"
+  local circle_tag="$2"
+  local package="$3"
+  local expected="$4"
+  shift 4
+  local tags_file="${TMP}/tags.txt"
+  local outfile="${TMP}/nested/custom-tags.txt"
+  mkdir -p "${TMP}/nested"
+  : > "$tags_file"
+  if [[ "$#" -gt 0 ]]; then
+    printf '%s\n' "$@" > "$tags_file"
+  fi
+  local status
+  status="$(run_script "$outfile" "$circle_tag" "$package" "" "$SHA" "$tags_file" "$FAKE_BIN")"
+  check_output "${name} (first run)" "$outfile" "${outfile}.log" "$status" "$expected"
+  # A second run must truncate, not append.
+  status="$(run_script "$outfile" "$circle_tag" "$package" "" "$SHA" "$tags_file" "$FAKE_BIN")"
+  check_output "${name} (second run truncates)" "$outfile" "${outfile}.log" "$status" "$expected"
+}
+
+check_against_oracle() {
+  local name="$1"
+  local circle_tag="$2"
+  local package="$3"
+  shift 3
+  local expected
+  expected="$(oracle_lines "$circle_tag" "$package" "$@")"
+  check_release "$name" "$circle_tag" "$package" "$expected" "$@"
+}
+
+golden() {
+  local name="$1"
+  local circle_tag="$2"
+  local package="$3"
+  local expected="$4"
+  shift 4
+  local oracle
+  oracle="$(oracle_lines "$circle_tag" "$package" "$@")"
+  if [[ "$oracle" != "$expected" ]]; then
+    printf 'ORACLE MISMATCH %s\n  handwritten:\n%s\n  oracle:\n%s\n' "$name" "$expected" "$oracle" >&2
+    exit 1
+  fi
+  check_release "$name" "$circle_tag" "$package" "$expected" "$@"
+}
+
+check_branch() {
+  local name="$1"
+  local branch="$2"
+  local sha="$3"
+  local expected="$4"
+  local tags_file="${TMP}/tags.txt"
+  local outfile="${TMP}/out.txt"
+  printf 'v9.9.9\n' > "$tags_file"
+  local status
+  status="$(run_script "$outfile" "" "" "$branch" "$sha" "$tags_file" "$FAKE_BIN")"
+  check_output "$name" "$outfile" "${outfile}.log" "$status" "$expected"
+}
+
+run_golden_cases() {
+  golden "reported v1.9.0 vs v11.0.0 keeps the major tag" \
+    "v1.9.0" "" $'1.9.0\n1.9\n1' \
+    "v11.0.0"
+
+  golden "reported v1.2.9 vs v1.23.0 keeps the minor tag" \
+    "v1.2.9" "" $'1.2.9\n1.2' \
+    "v1.23.0"
+
+  golden "reported prefixes combined do not steal 1.2" \
+    "v1.2.9" "" $'1.2.9\n1.2' \
+    "v1.23.0" "v11.0.0" "v102.0.0" "v1.2.8" "v1.20.0"
+
+  golden "v1.9.0 vs v1.19.0 keeps only the 1.9 line" \
+    "v1.9.0" "" $'1.9.0\n1.9' \
+    "v1.19.0" "v11.0.0"
+
+  golden "readme hotfix v2.4.8 does not move 2 or latest" \
+    "v2.4.8" "" $'2.4.8\n2.4' \
+    "v2.4.7" "v2.5.2" "v2.5.1" "v1.9.0"
+
+  golden "readme head v2.5.2 moves minor, major, and latest" \
+    "v2.5.2" "" $'2.5.2\n2.5\n2\nlatest' \
+    "v2.4.8" "v2.5.1"
+
+  golden "first release publishes every floating tag" \
+    "v1.0.0" "" $'1.0.0\n1.0\n1\nlatest'
+
+  golden "readme prerelease rc1 does not move floating tags" \
+    "v2.5.3-rc1" "" "2.5.3-rc1" \
+    "v2.5.2" "v2.5.3"
+
+  golden "readme prerelease alpha1 does not move floating tags" \
+    "v2.5.3-alpha1" "" "2.5.3-alpha1"
+
+  golden "readme prerelease beta4 does not move floating tags" \
+    "v2.5.3-beta4" "" "2.5.3-beta4" \
+    "v9.9.9"
+
+  golden "prerelease rc10 stays off the minor tag" \
+    "v1.2.4-rc10" "" "1.2.4-rc10" \
+    "v1.2.3" "v1.2.4"
+
+  golden "alpha of an existing final does not retarget latest" \
+    "v1.2.3-alpha2" "" "1.2.3-alpha2" \
+    "v1.2.3" "latest"
+
+  golden "higher prereleases do not block a final release" \
+    "v1.2.3" "" $'1.2.3\n1.2\n1\nlatest' \
+    "v1.2.3-rc1" "v1.3.0-rc1" "v2.0.0-beta2" "v1.2.2"
+
+  golden "version sort picks 1.10 over 1.9" \
+    "v1.10.0" "" $'1.10.0\n1.10\n1\nlatest' \
+    "v1.9.0" "v1.10.0-rc1"
+
+  golden "v1.9.0 does not take the minor line from v1.10.0" \
+    "v1.9.0" "" $'1.9.0\n1.9' \
+    "v1.10.0"
+
+  golden "patch 10 beats patch 9" \
+    "v1.2.10" "" $'1.2.10\n1.2\n1\nlatest' \
+    "v1.2.9"
+
+  golden "older patch publishes only the exact tag" \
+    "v1.2.9" "" "1.2.9" \
+    "v1.2.10"
+
+  golden "two-digit major is not swallowed by a three-digit major" \
+    "v10.2.0" "" $'10.2.0\n10.2' \
+    "v10.20.0" "v100.0.0"
+
+  golden "highest two-digit minor still moves its major" \
+    "v10.20.1" "" $'10.20.1\n10.20\n10' \
+    "v10.20.0" "v10.2.0" "v100.0.0"
+
+  golden "three-digit head publishes latest" \
+    "v100.0.1" "" $'100.0.1\n100.0\n100\nlatest' \
+    "v100.0.0" "v10.20.0" "v11.0.0"
+
+  golden "v102 does not count as minor 1.2 or major 1" \
+    "v1.2.9" "" $'1.2.9\n1.2\n1' \
+    "v102.0.0"
+
+  golden "v10 does not count as minor 1.0" \
+    "v1.0.9" "" $'1.0.9\n1.0\n1' \
+    "v10.0.0" "v1.0.8"
+
+  golden "v20 does not count as minor 2.0" \
+    "v2.0.1" "" $'2.0.1\n2.0\n2' \
+    "v20.0.0" "v2.0.0"
+
+  golden "monorepo minor prefix stays inside the package" \
+    "services/auth/v1.2.9" "services/auth" $'1.2.9\n1.2' \
+    "services/auth/v1.23.0" "services/auth/v1.2.8" "services/billing/v99.0.0" "v50.0.0"
+
+  golden "monorepo major prefix stays inside the package" \
+    "services/auth/v1.9.0" "services/auth" $'1.9.0\n1.9\n1' \
+    "services/auth/v11.0.0" "services/billing/v1.9.9" "other/v80.0.0"
+
+  golden "zero major minor prefix" \
+    "v0.9.1" "" $'0.9.1\n0.9' \
+    "v0.9.0" "v0.10.0"
+
+  golden "zero major head" \
+    "v0.10.2" "" $'0.10.2\n0.10\n0\nlatest' \
+    "v0.9.9"
+
+  golden "non-semver tags are ignored" \
+    "v1.4.5" "" $'1.4.5\n1.4\n1\nlatest' \
+    "latest" "edge" "v1" "v1.4" "1.9.0" "v1.4.5.1" "v1.4.4" "nightly" "v1.4.5-rc1"
+
+  golden "a newer patch prerelease does not block the final" \
+    "v2.0.0" "" $'2.0.0\n2.0\n2\nlatest' \
+    "v1.9.9" "v2.0.1-rc1"
+
+  golden "v1.15 is the 1.x head when v11 exists" \
+    "v1.15.0" "" $'1.15.0\n1.15\n1' \
+    "v1.2.9" "v11.2.0"
+
+  golden "v8.9.10 keeps 8.9 when 8.10 and 18 exist" \
+    "v8.9.10" "" $'8.9.10\n8.9' \
+    "v8.9.9" "v8.10.0" "v18.0.0"
+
+  golden "v8.10.0 moves major 8 but not latest" \
+    "v8.10.0" "" $'8.10.0\n8.10\n8' \
+    "v8.9.10" "v18.0.0"
+
+  golden "v18.0.1 is the overall head" \
+    "v18.0.1" "" $'18.0.1\n18.0\n18\nlatest' \
+    "v18.0.0" "v8.10.0"
+
+  golden "v2.10.0 sorts above v2.9.0" \
+    "v2.10.0" "" $'2.10.0\n2.10\n2\nlatest' \
+    "v2.1.0" "v2.9.0"
+
+  golden "new minor becomes the major head" \
+    "v1.6.0" "" $'1.6.0\n1.6\n1' \
+    "v1.5.9" "v2.0.0"
+
+  golden "older major hotfix stays on its minor" \
+    "v1.4.8" "" $'1.4.8\n1.4' \
+    "v1.4.7" "v1.5.0" "v2.0.0"
+
+  golden "tag already present in git is not double counted into extra lines" \
+    "v1.2.3" "" $'1.2.3\n1.2\n1\nlatest' \
+    "v1.2.3" "v1.2.2"
+
+  golden "current tag absent from git is still included" \
+    "v1.2.3" "" $'1.2.3\n1.2\n1\nlatest' \
+    "v1.2.2"
+
+  check_release_twice "rerun truncates a custom outfile" \
+    "v1.0.0" "" $'1.0.0\n1.0\n1\nlatest'
+}
+
+run_branch_cases() {
+  check_branch "trunk main publishes edge and the sha tag" \
+    "main" "$SHA" $'edge\n'"main-${SHORT_SHA}"
+  check_branch "trunk master publishes edge and the sha tag" \
+    "master" "$SHA" $'edge\n'"master-${SHORT_SHA}"
+  check_branch "trunk develop publishes edge and the sha tag" \
+    "develop" "$SHA" $'edge\n'"develop-${SHORT_SHA}"
+  check_branch "feature branch publishes only a dev sha tag" \
+    "feature/xyz" "$SHA" "dev-${SHORT_SHA}"
+  check_branch "MAIN is not treated as trunk" \
+    "MAIN" "$SHA" "dev-${SHORT_SHA}"
+  check_branch "mainline is not treated as trunk" \
+    "mainline" "$SHA" "dev-${SHORT_SHA}"
+  check_branch "empty branch publishes a dev sha tag" \
+    "" "$SHA" "dev-${SHORT_SHA}"
+  check_branch "sha slice follows CIRCLE_SHA1" \
+    "feature/other" "$ALT_SHA" "dev-${ALT_SHORT}"
+
+  local expected
+  expected="$(oracle_lines "v1.2.3" "" "v1.2.2")"
+  local tags_file="${TMP}/tags.txt"
+  local outfile="${TMP}/out.txt"
+  printf 'v1.2.2\n' > "$tags_file"
+  local status
+  status="$(run_script "$outfile" "v1.2.3" "" "main" "$SHA" "$tags_file" "$FAKE_BIN")"
+  check_output "semver tag wins over a main branch" "$outfile" "${outfile}.log" "$status" "$expected"
+
+  expected="1.2.3-rc1"
+  status="$(run_script "$outfile" "v1.2.3-rc1" "" "main" "$SHA" "$tags_file" "$FAKE_BIN")"
+  check_output "prerelease tag wins over a main branch" "$outfile" "${outfile}.log" "$status" "$expected"
+}
+
+run_major_prefix_matrix() {
+  local major suffix distractor
+  for major in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    for suffix in 0 1 2 5 9; do
+      distractor="${major}${suffix}"
+      check_against_oracle \
+        "major prefix ${major} against ${distractor}" \
+        "v${major}.4.2" "" \
+        "v${distractor}.0.0" \
+        "v${major}.4.1" \
+        "v${major}.3.9" \
+        "v${major}.4.2-rc1" \
+        "v${major}.4.3-alpha1" \
+        "latest" \
+        "edge"
+    done
+  done
+}
+
+run_minor_prefix_matrix() {
+  local major minor suffix distractor
+  for major in 1 2 8 10; do
+    for minor in 1 2 3 4 5 6 7 8 9; do
+      for suffix in 0 1 2 3 9; do
+        distractor=$((10 * minor + suffix))
+        check_against_oracle \
+          "minor prefix ${major}.${minor} against ${major}.${distractor}" \
+          "v${major}.${minor}.7" "" \
+          "v${major}.${distractor}.0" \
+          "v${major}.${minor}.6" \
+          "v${major}.${minor}.7-rc2" \
+          "v${major}.$((minor + 1)).0-beta1"
+      done
+    done
+  done
+}
+
+run_cross_major_dot_matrix() {
+  # Old minor patterns such as v1.2. also matched v102 because "." consumed a digit.
+  local major minor digit other_major
+  for major in 1 2 3 4 5 6 7 8 9; do
+    for minor in 0 1 2 3 4 5 6 7 8 9; do
+      for digit in 0 1 5 9; do
+        other_major="${major}${digit}${minor}"
+        check_against_oracle \
+          "cross-major ${major}.${minor} against v${other_major}" \
+          "v${major}.${minor}.4" "" \
+          "v${other_major}.0.0" \
+          "v${major}.${minor}.3"
+      done
+    done
+  done
+}
+
+run_patch_matrix() {
+  local patch
+  for patch in 0 1 2 8 9 10 11 15; do
+    check_against_oracle \
+      "older patch v5.6.${patch} under v5.6.20" \
+      "v5.6.${patch}" "" \
+      "v5.6.20" "v5.7.0" "v6.0.0" "v5.6.${patch}-rc1"
+  done
+  check_against_oracle \
+    "head of minor but not major" \
+    "v5.6.20" "" \
+    "v5.6.15" "v5.7.0" "v6.0.0"
+  check_against_oracle \
+    "head of major but not overall" \
+    "v5.7.1" "" \
+    "v5.7.0" "v5.6.20" "v6.0.0"
+}
+
+run_head_matrix() {
+  local major minor patch
+  local -a lower=()
+  for major in 1 2 3 5 9 10 11 15 20; do
+    for minor in 0 1 2 9 10 11; do
+      for patch in 0 1 9 10; do
+        lower=()
+        if [[ "$patch" -gt 0 ]]; then
+          lower+=("v${major}.${minor}.$((patch - 1))")
+        fi
+        if [[ "$minor" -gt 0 ]]; then
+          lower+=("v${major}.$((minor - 1)).9")
+        fi
+        if [[ "$major" -gt 1 ]]; then
+          lower+=("v$((major - 1)).9.9")
+        fi
+        lower+=("v${major}.${minor}.$((patch + 1))-rc1")
+        check_against_oracle \
+          "head v${major}.${minor}.${patch}" \
+          "v${major}.${minor}.${patch}" "" \
+          "${lower[@]}"
+      done
+    done
+  done
+}
+
+run_monorepo_matrix() {
+  local minor
+  for minor in 1 2 5 9 10 12; do
+    check_against_oracle \
+      "monorepo auth v1.${minor}.4" \
+      "services/auth/v1.${minor}.4" "services/auth" \
+      "services/auth/v1.${minor}.3" \
+      "services/auth/v1.$((minor + 10)).0" \
+      "services/auth/v11.0.0" \
+      "services/billing/v${minor}.99.0" \
+      "services/billing/v99.0.0" \
+      "other/v70.1.1" \
+      "v80.0.0"
+  done
+}
+
+run_prerelease_matrix() {
+  local kind number
+  for kind in alpha beta rc; do
+    for number in 1 2 10; do
+      check_against_oracle \
+        "prerelease ${kind}${number} with a lower final" \
+        "v4.5.6-${kind}${number}" "" \
+        "v4.5.5" "v4.5.6" "v4.4.0" "v9.0.0"
+      check_against_oracle \
+        "prerelease ${kind}${number} alone" \
+        "v4.5.6-${kind}${number}" ""
+    done
+  done
+}
+
+run_stress_set() {
+  local -a tags=()
+  local major minor
+  for major in {1..12}; do
+    for minor in {0..15}; do
+      tags+=("v${major}.${minor}.0" "v${major}.${minor}.1" "v${major}.${minor}.9" "v${major}.${minor}.10")
+    done
+  done
+  tags+=(
+    "v1.20.0" "v1.23.4" "v1.23.4-rc1" "v11.0.0" "v102.0.0"
+    "latest" "edge" "nightly" "v1" "v1.2" "1.2.3"
+  )
+  local release
+  for release in \
+    v1.0.0 v1.2.9 v1.2.10 v1.15.10 v1.23.4 \
+    v2.0.10 v7.8.9 v8.15.10 v10.0.0 v10.15.10 \
+    v11.0.0 v12.15.10
+  do
+    check_against_oracle "stress ${release}" "$release" "" "${tags[@]}"
+  done
+}
+
+run_real_git_smoke() {
+  local repo="${TMP}/real-repo"
+  mkdir -p "$repo"
+  "$REAL_GIT" -C "$repo" init -q
+  "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "$repo" config user.name "Tag Tests"
+  printf 'init\n' > "${repo}/README"
+  "$REAL_GIT" -C "$repo" add README
+  "$REAL_GIT" -C "$repo" commit -q -m init
+  "$REAL_GIT" -C "$repo" tag v11.0.0
+  "$REAL_GIT" -C "$repo" tag -a v1.8.0 -m "annotated older release"
+  "$REAL_GIT" -C "$repo" tag v1.9.0-rc1
+
+  local outfile="${TMP}/real-out.txt"
+  local status
+  (
+    cd "$repo"
+    export PARAM_OUTFILE="$outfile"
+    export PARAM_PACKAGE=""
+    export CIRCLE_TAG="v1.9.0"
+    export CIRCLE_BRANCH="main"
+    export CIRCLE_SHA1="$SHA"
+    export CIRCLE_BUILD_NUM="1"
+    export LC_ALL=C
+    export GIT_PAGER=cat
+    export GIT_TERMINAL_PROMPT=0
+    PATH="${CIRCLECI_ONLY}:${ORIGINAL_PATH}" bash "$SCRIPT" > "${outfile}.log" 2>&1
+  ) && status=0 || status=$?
+  check_output "real git v1.9.0 vs annotated v1.8.0 and v11.0.0" \
+    "$outfile" "${outfile}.log" "$status" $'1.9.0\n1.9\n1'
+}
+
+main() {
+  assert_sort_agrees_with_oracle
+  run_golden_cases
+  run_branch_cases
+  run_major_prefix_matrix
+  run_minor_prefix_matrix
+  run_cross_major_dot_matrix
+  run_patch_matrix
+  run_head_matrix
+  run_monorepo_matrix
+  run_prerelease_matrix
+  run_stress_set
+  run_real_git_smoke
+
+  printf 'passed=%s failed=%s\n' "$PASSED" "$FAILED"
+  if [[ "$FAILED" -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+main "$@"

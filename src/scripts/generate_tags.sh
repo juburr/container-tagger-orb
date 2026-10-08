@@ -56,9 +56,11 @@ if [[ "$CIRCLE_TAG" =~ v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)[0-9]+)?$ ]]; the
 
     HIGHEST_VERSION=$({ git tag; echo "${ADDED_TAG}"; } | grep "^${PACKAGE}" |  sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | sort -r --version-sort | head -n 1)
     echo "  HIGHEST_VERSION: ${HIGHEST_VERSION}"
-    HIGHEST_WITH_SAME_MAJOR=$({ git tag; echo "${ADDED_TAG}"; } | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -i "v${MAJOR_VER}." | sort -r --version-sort | head -n 1)
+    # Match a whole numeric component. An unescaped "." matches any character,
+    # so "v1." also matched v11 and "v1.2." also matched v1.23.
+    HIGHEST_WITH_SAME_MAJOR=$({ git tag; echo "${ADDED_TAG}"; } | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -E "^v${MAJOR_VER}\.[0-9]+\.[0-9]+$" | sort -r --version-sort | head -n 1)
     echo "  HIGHEST_WITH_SAME_MAJOR: ${HIGHEST_WITH_SAME_MAJOR}"
-    HIGHEST_WITH_SAME_MINOR=$({ git tag; echo "${ADDED_TAG}"; } | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -i "v${MAJOR_VER}.${MINOR_VER}." | sort -r --version-sort | head -n 1)
+    HIGHEST_WITH_SAME_MINOR=$({ git tag; echo "${ADDED_TAG}"; } | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -E "^v${MAJOR_VER}\.${MINOR_VER}\.[0-9]+$" | sort -r --version-sort | head -n 1)
     echo "  HIGHEST_WITH_SAME_MINOR: ${HIGHEST_WITH_SAME_MINOR}"
 
     if [[ -z ${PRERELEASE_VER} ]]; then
