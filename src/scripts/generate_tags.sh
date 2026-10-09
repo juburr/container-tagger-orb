@@ -173,14 +173,37 @@ git_config_quote() {
     printf '%s' "${value}"
 }
 
+# 0 when an http(s) URL has userinfo in its authority. "@" in the path,
+# query, or fragment does not count: the authority ends at the first
+# "/", "?", "#", or whitespace.
+url_has_userinfo() {
+    local url="$1"
+    local rest authority
+    case "${url}" in
+        *$'\n'*|*$'\r'*) return 0 ;;
+        http://*|https://*|HTTP://*|HTTPS://*) ;;
+        *) return 1 ;;
+    esac
+    rest="${url#*://}"
+    case "${rest}" in
+        *[[:space:]/?#]*) authority="${rest%%[[:space:]/?#]*}" ;;
+        *) authority="${rest}" ;;
+    esac
+    case "${authority}" in
+        *"@"*) return 0 ;;
+    esac
+    return 1
+}
+
 # Classify an effective remote URL.
 #   0  http(s) URL with userinfo; REMOTE_* describe how to shield it
 #   1  nothing to shield
 #   2  userinfo is present but cannot be moved safely
-# Git splits userinfo on the first "@", then on the first ":" inside that.
+# Git splits userinfo on the first "@" inside the authority, then on the
+# first ":" inside that userinfo. "%40" is decoded only after that split.
 classify_remote_url() {
     local url="$1"
-    local scheme rest userinfo after authority
+    local scheme rest userinfo suffix authority hostport
     REMOTE_STRIPPED_URL=""
     REMOTE_USERNAME=""
     REMOTE_PASSWORD=""
@@ -201,11 +224,21 @@ classify_remote_url() {
         *) return 1 ;;
     esac
     case "${rest}" in
+        *[[:space:]/?#]*)
+            authority="${rest%%[[:space:]/?#]*}"
+            suffix="${rest#"${authority}"}"
+            ;;
+        *)
+            authority="${rest}"
+            suffix=""
+            ;;
+    esac
+    case "${authority}" in
         *"@"*) ;;
         *) return 1 ;;
     esac
-    userinfo="${rest%%@*}"
-    after="${rest#*@}"
+    userinfo="${authority%%@*}"
+    hostport="${authority#*@}"
     case "${userinfo}" in
         *%00*) return 2 ;;
     esac
@@ -219,20 +252,17 @@ classify_remote_url() {
     case "${REMOTE_USERNAME}${REMOTE_PASSWORD}" in
         *$'\n'*|*$'\r'*) return 2 ;;
     esac
-    REMOTE_STRIPPED_URL="${scheme}://${after}"
+    # A second "@" means the password was not encoded. Git then treats the
+    # remainder as the host, so there is no safe URL to hand to the transport.
+    case "${hostport}" in
+        *"@"*) return 2 ;;
+        *%00*|"") return 2 ;;
+    esac
+    REMOTE_STRIPPED_URL="${scheme}://${hostport}${suffix}"
     REMOTE_PROTOCOL=$(printf '%s' "${scheme}" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz')
-    authority="${after}"
-    case "${authority}" in
-        *[[:space:]/?#]*)
-            authority="${authority%%[[:space:]/?#]*}"
-            ;;
-    esac
-    case "${authority}" in
-        *%00*) return 2 ;;
-    esac
-    REMOTE_HOST=$(percent_decode "${authority}") || return 2
+    REMOTE_HOST=$(percent_decode "${hostport}") || return 2
     case "${REMOTE_HOST}" in
-        *$'\n'*|*$'\r'*|"") return 2 ;;
+        *"@"*|*$'\n'*|*$'\r'*|"") return 2 ;;
     esac
     return 0
 }
@@ -240,28 +270,42 @@ classify_remote_url() {
 # Rewrite this one invocation so git-remote-http receives a URL with no
 # userinfo. The checkout's stored remote is not modified. Credential material
 # stays in mode-600 files; it is not placed on a command line.
+# raw_url is the configured remote value before insteadOf. A shorthand such
+# as "work:repo.git" has to be listed or ls-remote starts from that alias
+# and the configured rewrite puts the token back on the helper command line.
 write_auth_shield() {
     local dir="$1"
     local effective="$2"
+    local raw_url="$3"
     (
         # The caller is `if ! load_git_tags`, which disables set -e for this
         # whole call stack. Turn it back on so a partial shield is not used.
         set -e
         umask 077
-        printf '%s' "${REMOTE_USERNAME}" > "${dir}/username"
-        printf '%s' "${REMOTE_PROTOCOL}" > "${dir}/protocol"
-        printf '%s' "${REMOTE_HOST}" > "${dir}/host"
-        if [[ "${REMOTE_HAS_PASSWORD}" -eq 1 ]]; then
-            printf '%s' "${REMOTE_PASSWORD}" > "${dir}/password"
-        fi
         quoted_base=$(git_config_quote "${REMOTE_STRIPPED_URL}") || exit 1
         quoted_effective=$(git_config_quote "${effective}") || exit 1
+        quoted_raw=$(git_config_quote "${raw_url}") || exit 1
         {
+            # No embedded password: keep inherited helpers, and give them the
+            # username from this file instead of from the transport URL.
+            if [[ "${REMOTE_HAS_PASSWORD}" -eq 0 ]]; then
+                quoted_user=$(git_config_quote "${REMOTE_USERNAME}") || exit 1
+                printf '[credential]\n'
+                printf '\tusername = "%s"\n' "${quoted_user}"
+            fi
             printf '[url "%s"]\n' "${quoted_base}"
             printf '\tinsteadOf = "%s"\n' "${quoted_effective}"
             printf '\tinsteadOf = "%s"\n' "${quoted_base}"
+            if [[ -n "${raw_url}" && "${raw_url}" != "${effective}" && "${raw_url}" != "${REMOTE_STRIPPED_URL}" ]]; then
+                printf '\tinsteadOf = "%s"\n' "${quoted_raw}"
+            fi
         } > "${dir}/rewrite"
-        cat > "${dir}/helper" << 'EOF'
+        if [[ "${REMOTE_HAS_PASSWORD}" -eq 1 ]]; then
+            printf '%s' "${REMOTE_USERNAME}" > "${dir}/username"
+            printf '%s' "${REMOTE_PROTOCOL}" > "${dir}/protocol"
+            printf '%s' "${REMOTE_HOST}" > "${dir}/host"
+            printf '%s' "${REMOTE_PASSWORD}" > "${dir}/password"
+            cat > "${dir}/helper" << 'EOF'
 #!/bin/sh
 # Credential helper for one ls-remote. The secret values live in files.
 [ "${1:-}" = "get" ] || exit 0
@@ -283,15 +327,36 @@ fi
 printf '\n'
 exit 0
 EOF
-        chmod 700 "${dir}/helper"
+            chmod 700 "${dir}/helper"
+        fi
     )
+}
+
+# Run git with the shield config. With an embedded password, inherited
+# helpers are cleared so the URL's own credentials stay authoritative.
+# With only a username, inherited helpers still run and can supply the password.
+shielded_git() {
+    local shield_dir="$1"
+    shift
+    if [[ "${REMOTE_HAS_PASSWORD}" -eq 1 ]]; then
+        CRED_DIR="${shield_dir}" \
+        GIT_TERMINAL_PROMPT=0 \
+        git -c "include.path=${shield_dir}/rewrite" \
+            -c 'credential.helper=' \
+            -c "credential.helper=${shield_dir}/helper" \
+            "$@"
+        return
+    fi
+    GIT_TERMINAL_PROMPT=0 \
+    git -c "include.path=${shield_dir}/rewrite" \
+        "$@"
 }
 
 # Read tag names from the remote. On success, set remote_raw.
 fetch_remote_tag_text() {
     local tag_remote="$1"
     local err_file="$2"
-    local remote_url classify_status shield_dir ls_status
+    local remote_url raw_url classify_status shield_dir ls_status probed_url
     # classify_remote_url writes these and write_auth_shield reads them.
     # shellcheck disable=SC2034
     local REMOTE_STRIPPED_URL REMOTE_USERNAME REMOTE_PASSWORD REMOTE_HAS_PASSWORD REMOTE_PROTOCOL REMOTE_HOST
@@ -306,29 +371,38 @@ fetch_remote_tag_text() {
         return 1
     fi
     if [[ "${classify_status}" -eq 0 ]]; then
+        # The configured value, before insteadOf. get-url has already expanded aliases.
+        if ! raw_url=$(git --no-pager config --local --get "remote.${tag_remote}.url" 2>"${err_file}"); then
+            refuse_history "git config failed to read the remote URL for '${tag_remote}', so existing release tags cannot be compared." "${err_file}"
+            return 1
+        fi
         shield_dir=$(mktemp -d) || {
             echo "Error: could not create a temporary directory, so existing release tags cannot be compared."
             echo "Refusing to publish latest, major, or minor tags from an incomplete history."
             return 1
         }
         chmod 700 "${shield_dir}"
-        if ! write_auth_shield "${shield_dir}" "${remote_url}"; then
+        if ! write_auth_shield "${shield_dir}" "${remote_url}" "${raw_url}"; then
+            rm -rf "${shield_dir}"
+            refuse_history "the remote URL for '${tag_remote}' cannot be read without exposing embedded credentials, so existing release tags cannot be compared." "${err_file}"
+            return 1
+        fi
+        # Ask git which URL it will actually use. ls-remote is given the
+        # stripped URL, not the remote name, so a shorthand alias is not the
+        # string insteadOf starts from. If rewriting still leaves userinfo,
+        # refuse instead of spawning the transport helper.
+        ls_status=0
+        probed_url=$(
+            shielded_git "${shield_dir}" --no-pager ls-remote --get-url -- "${REMOTE_STRIPPED_URL}" 2>"${err_file}"
+        ) || ls_status=$?
+        if [[ "${ls_status}" -ne 0 || -z "${probed_url}" ]] || url_has_userinfo "${probed_url}"; then
             rm -rf "${shield_dir}"
             refuse_history "the remote URL for '${tag_remote}' cannot be read without exposing embedded credentials, so existing release tags cannot be compared." "${err_file}"
             return 1
         fi
         ls_status=0
-        # include.path rewrites the URL before git-remote-http is spawned.
-        # The empty credential.helper value clears inherited helpers so the
-        # credentials that were embedded in the URL remain the ones that are used.
         remote_raw=$(
-            CRED_DIR="${shield_dir}" \
-            GIT_TERMINAL_PROMPT=0 \
-            git -c "include.path=${shield_dir}/rewrite" \
-                -c 'credential.helper=' \
-                -c "credential.helper=${shield_dir}/helper" \
-                --no-pager ls-remote --refs --tags -- "${tag_remote}" \
-                2>"${err_file}"
+            shielded_git "${shield_dir}" --no-pager ls-remote --refs --tags -- "${REMOTE_STRIPPED_URL}" 2>"${err_file}"
         ) || ls_status=$?
         rm -rf "${shield_dir}"
         if [[ "${ls_status}" -ne 0 ]]; then

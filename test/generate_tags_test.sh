@@ -75,6 +75,26 @@ if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--is-inside-work-tree" ]]; then
       ;;
   esac
 fi
+if [[ "${1:-}" == "config" ]]; then
+  shift
+  if [[ "${1:-}" == "--local" ]]; then
+    shift
+  fi
+  if [[ "${1:-}" == "--get" ]]; then
+    if [[ -n "${GIT_CONFIG_GET_EXIT:-}" && "${GIT_CONFIG_GET_EXIT}" != "0" ]]; then
+      echo "fatal: config get failed" >&2
+      exit "${GIT_CONFIG_GET_EXIT}"
+    fi
+    if [[ -n "${GIT_REMOTE_RAW_URL:-}" ]]; then
+      printf '%s\n' "${GIT_REMOTE_RAW_URL}"
+    elif [[ -n "${GIT_REMOTE_URL:-}" ]]; then
+      printf '%s\n' "${GIT_REMOTE_URL}"
+    else
+      printf '%s\n' "https://example.test/repo.git"
+    fi
+    exit 0
+  fi
+fi
 if [[ "${1:-}" == "remote" && "${2:-}" == "get-url" ]]; then
   if [[ -n "${GIT_REMOTE_GET_URL_EXIT:-}" && "${GIT_REMOTE_GET_URL_EXIT}" != "0" ]]; then
     echo "fatal: No such remote '${3:-}'" >&2
@@ -95,6 +115,18 @@ if [[ "${1:-}" == "remote" && -z "${2:-}" ]]; then
   if [[ -n "${GIT_REMOTES:-}" ]]; then
     printf '%s\n' "${GIT_REMOTES}"
   fi
+  exit 0
+fi
+if [[ "${1:-}" == "ls-remote" && "${2:-}" == "--get-url" ]]; then
+  shift 2
+  if [[ "${1:-}" == "--" ]]; then
+    shift
+  fi
+  if [[ -z "${1:-}" ]]; then
+    echo "fatal: missing url" >&2
+    exit 1
+  fi
+  printf '%s\n' "$1"
   exit 0
 fi
 if [[ "${1:-}" == "ls-remote" && "${2:-}" == "--refs" && "${3:-}" == "--tags" ]]; then
@@ -373,7 +405,9 @@ run_script() {
   export GIT_REMOTES="${GIT_REMOTES-}"
   export GIT_REMOTE_EXIT="${GIT_REMOTE_EXIT-}"
   export GIT_REMOTE_URL="${GIT_REMOTE_URL-}"
+  export GIT_REMOTE_RAW_URL="${GIT_REMOTE_RAW_URL-}"
   export GIT_REMOTE_GET_URL_EXIT="${GIT_REMOTE_GET_URL_EXIT-}"
+  export GIT_CONFIG_GET_EXIT="${GIT_CONFIG_GET_EXIT-}"
   export GIT_LS_REMOTE_EXIT="${GIT_LS_REMOTE_EXIT-}"
   export GIT_LS_REMOTE_STDERR="${GIT_LS_REMOTE_STDERR-}"
   export GIT_LS_REMOTE_TAGS_FILE="${GIT_LS_REMOTE_TAGS_FILE-}"
@@ -1139,7 +1173,7 @@ run_remote_tag_cases() {
   local status remote_queries
 
   clear_remote_env() {
-    unset GIT_REMOTES GIT_REMOTE_EXIT GIT_REMOTE_URL GIT_REMOTE_GET_URL_EXIT GIT_LS_REMOTE_EXIT GIT_LS_REMOTE_STDERR GIT_LS_REMOTE_TAGS_FILE GIT_COMMAND_LOG
+    unset GIT_REMOTES GIT_REMOTE_EXIT GIT_REMOTE_URL GIT_REMOTE_RAW_URL GIT_REMOTE_GET_URL_EXIT GIT_CONFIG_GET_EXIT GIT_LS_REMOTE_EXIT GIT_LS_REMOTE_STDERR GIT_LS_REMOTE_TAGS_FILE GIT_COMMAND_LOG
   }
   clear_remote_env
 
@@ -1377,8 +1411,58 @@ run_remote_tag_cases() {
     "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4\n4'
   if grep -F "ghs_testtoken_not_real" "$command_log" >/dev/null || grep -F "ghs_testtoken_not_real" "${outfile}.log" >/dev/null; then
     fail_case "embedded credentials stay off the git command line" "token was visible"
+  elif ! grep -F "ls-remote --refs --tags -- https://example.test/org/repo.git" "$command_log" >/dev/null; then
+    fail_case "embedded credentials stay off the git command line" "missing stripped ls-remote" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  printf '%s\n' "v5.0.0" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_REMOTE_URL="https://example.test/group/foo@bar.git"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "an @ in the repository path is not userinfo" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4\n4'
+  if grep -F "ls-remote --get-url" "$command_log" >/dev/null || grep -F "https://bar.git" "$command_log" >/dev/null; then
+    fail_case "an @ in the repository path is not userinfo" "$(cat "$command_log")"
   elif ! grep -F "ls-remote --refs --tags -- origin" "$command_log" >/dev/null; then
-    fail_case "embedded credentials stay off the git command line" "missing ls-remote" "$(cat "$command_log")"
+    fail_case "an @ in the repository path is not userinfo" "missing origin ls-remote" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  GIT_REMOTES="origin"
+  GIT_REMOTE_URL="http://user:p@ss@example.test/repo.git"
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  assert_withheld "an unencoded @ in the password does not publish latest" "$outfile" "$status" "4.4.7"
+  if grep -q "ls-remote" "$command_log"; then
+    fail_case "an unencoded @ in the password does not query the remote" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  GIT_REMOTES="origin"
+  GIT_REMOTE_URL="https://x-access-token:ghs_testtoken_not_real@example.test/org/repo.git"
+  GIT_CONFIG_GET_EXIT=2
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  assert_withheld "unreadable raw remote URL does not publish latest" "$outfile" "$status" "4.4.7"
+  if grep -q "ls-remote" "$command_log"; then
+    fail_case "unreadable raw remote URL does not query the remote" "$(cat "$command_log")"
+  elif grep -F "ghs_testtoken_not_real" "$command_log" >/dev/null || grep -F "ghs_testtoken_not_real" "${outfile}.log" >/dev/null; then
+    fail_case "unreadable raw remote URL does not print the token" "token was visible"
   else
     pass_case
   fi
@@ -1482,18 +1566,40 @@ run_credential_argv_cases() {
     ln -s "$helper_name" "$libexec/$(basename "$helper_name")"
   done
   rm -f "$libexec/git-remote-http" "$libexec/git-remote-https"
+  local argv_mark git_wrap real_git_q
+  argv_mark="${TMP}/argv-mark"
+  cat > "$argv_mark" << 'EOF'
+#!/bin/bash
+# transport: always record CLEAN or LEAK. parent: record LEAK only, so a
+# clean git process is not mistaken for the transport helper running.
+kind="$1"
+shift
+mark=CLEAN
+for arg in "$@"; do
+  if [[ "$arg" == *credential.username=* ]]; then
+    mark=LEAK
+  fi
+  if [[ "$arg" == *"://"* ]]; then
+    rest="${arg#*://}"
+    case "$rest" in
+      *[[:space:]/?#]*) auth="${rest%%[[:space:]/?#]*}" ;;
+      *) auth="$rest" ;;
+    esac
+    if [[ "$auth" == *"@"* ]]; then
+      mark=LEAK
+    fi
+  fi
+done
+if [[ -n "${ARGV_LOG:-}" && ( "$kind" == "transport" || "$mark" == "LEAK" ) ]]; then
+  printf '%s\n' "$mark" >> "$ARGV_LOG"
+fi
+EOF
+  chmod 700 "$argv_mark"
+  argv_mark=$(printf '%q' "$argv_mark")
   wrapper_http=$(printf '%q' "$real_http")
   cat > "$libexec/git-remote-http" << EOF
 #!/bin/bash
-mark=CLEAN
-for arg in "\$@"; do
-  if [[ "\${arg}" == *"://"*@* ]]; then
-    mark=LEAK
-  fi
-done
-if [[ -n "\${ARGV_LOG:-}" ]]; then
-  echo "\${mark}" >> "\${ARGV_LOG}"
-fi
+${argv_mark} transport "\$@"
 exec ${wrapper_http} "\$@"
 EOF
   # The https wrapper must exec the real https helper, not the http one.
@@ -1501,18 +1607,19 @@ EOF
   wrapper_https=$(printf '%q' "${real_exec}/git-remote-https")
   cat > "$libexec/git-remote-https" << EOF
 #!/bin/bash
-mark=CLEAN
-for arg in "\$@"; do
-  if [[ "\${arg}" == *"://"*@* ]]; then
-    mark=LEAK
-  fi
-done
-if [[ -n "\${ARGV_LOG:-}" ]]; then
-  echo "\${mark}" >> "\${ARGV_LOG}"
-fi
+${argv_mark} transport "\$@"
 exec ${wrapper_https} "\$@"
 EOF
   chmod +x "$libexec/git-remote-http" "$libexec/git-remote-https"
+  git_wrap="${TMP}/git-wrap"
+  mkdir -p "$git_wrap"
+  real_git_q=$(printf '%q' "$REAL_GIT")
+  cat > "$git_wrap/git" << EOF
+#!/bin/bash
+${argv_mark} parent "\$@"
+exec ${real_git_q} "\$@"
+EOF
+  chmod 700 "$git_wrap/git"
 
   cat > "$server_py" << 'PY'
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1535,7 +1642,7 @@ ThreadingHTTPServer.allow_reuse_address = True
 srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
 with open(os.environ["PORT_FILE"], "w") as handle:
     handle.write(str(srv.server_address[1]))
-for _ in range(64):
+for _ in range(128):
     srv.handle_request()
 PY
   : > "$auth_log"
@@ -1599,6 +1706,17 @@ PY
   "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
   "$REAL_GIT" -C "$repo" config user.name "Tag Tests"
   "$REAL_GIT" -C "$repo" remote add origin "http://x-access-token:ghs_testtoken_not_real@127.0.0.1:${port}/repo.git"
+  cat > "${TMP}/wrong-helper" << 'EOF'
+#!/bin/sh
+[ "${1:-}" = "get" ] || exit 0
+while IFS= read -r line; do
+  [ -z "${line}" ] && break
+done
+printf 'password=wrong-secret\n\n'
+exit 0
+EOF
+  chmod 700 "${TMP}/wrong-helper"
+  "$REAL_GIT" -C "$repo" config credential.helper "${TMP}/wrong-helper"
   cp "$repo/.git/config" "${TMP}/cred-direct-config"
   : > "$argv_log"
   : > "$auth_log"
@@ -1645,6 +1763,48 @@ PY
   assert_shielded_fetch "encoded credentials are decoded for the request and kept off the command line" \
     "user" 'p#ass*word' 'p%23ass*word'
 
+  repo="${TMP}/cred-alias"
+  outfile="${TMP}/cred-alias-out.txt"
+  "$REAL_GIT" init -q -b main "$repo"
+  "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "$repo" config user.name "Tag Tests"
+  "$REAL_GIT" -C "$repo" remote add origin "work:repo.git"
+  "$REAL_GIT" -C "$repo" config "url.http://x-access-token:ghs_testtoken_not_real@127.0.0.1:${port}/base/.insteadOf" "work:"
+  : > "$argv_log"
+  : > "$auth_log"
+  status=0
+  run_credential_git "$repo" "$outfile" "v4.4.7" || status=$?
+  assert_withheld "shorthand insteadOf credentials do not publish latest when the remote read fails" \
+    "$outfile" "$status" "4.4.7"
+  assert_shielded_fetch "shorthand insteadOf credentials stay off the transport command line" \
+    "x-access-token" "ghs_testtoken_not_real" "ghs_testtoken_not_real"
+
+  repo="${TMP}/cred-useronly"
+  outfile="${TMP}/cred-useronly-out.txt"
+  cat > "${TMP}/store-helper" << 'EOF'
+#!/bin/sh
+[ "${1:-}" = "get" ] || exit 0
+while IFS= read -r line; do
+  [ -z "${line}" ] && break
+done
+printf 'password=s3cret-from-helper\n\n'
+exit 0
+EOF
+  chmod 700 "${TMP}/store-helper"
+  "$REAL_GIT" init -q -b main "$repo"
+  "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "$repo" config user.name "Tag Tests"
+  "$REAL_GIT" -C "$repo" remote add origin "http://ali%23ce@127.0.0.1:${port}/repo.git"
+  "$REAL_GIT" -C "$repo" config credential.helper "${TMP}/store-helper"
+  : > "$argv_log"
+  : > "$auth_log"
+  status=0
+  run_credential_git "$repo" "$outfile" "v4.4.7" || status=$?
+  assert_withheld "username-only URLs do not publish latest when the remote read fails" \
+    "$outfile" "$status" "4.4.7"
+  assert_shielded_fetch "username-only URLs keep inherited password helpers" \
+    'ali#ce' 's3cret-from-helper' 's3cret-from-helper'
+
   kill "$SERVER_PID" 2>/dev/null || true
   wait "$SERVER_PID" 2>/dev/null || true
   SERVER_PID=""
@@ -1670,7 +1830,7 @@ run_credential_git() {
       GIT_TERMINAL_PROMPT=0 \
       GIT_EXEC_PATH="$exec_path" \
       ARGV_LOG="$argv_log" \
-      PATH="${CIRCLECI_ONLY}:${ORIGINAL_PATH}" \
+      PATH="${TMP}/git-wrap:${CIRCLECI_ONLY}:${ORIGINAL_PATH}" \
       timeout 30 bash "$SCRIPT" > "${outfile}.log" 2>&1
   )
 }
