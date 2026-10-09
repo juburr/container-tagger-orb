@@ -41,6 +41,12 @@ cp "${FAKE_BIN}/circleci" "${CIRCLECI_ONLY}/circleci"
 
 cat > "${FAKE_BIN}/git" << 'EOF'
 #!/usr/bin/env bash
+if [[ -n "${GIT_COMMAND_LOG:-}" ]]; then
+  printf '%s\n' "$*" >> "$GIT_COMMAND_LOG"
+fi
+if [[ "${1:-}" == "--no-pager" ]]; then
+  shift
+fi
 if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--is-inside-work-tree" ]]; then
   case "${GIT_WORK_TREE:-true}" in
     true)
@@ -56,6 +62,52 @@ if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--is-inside-work-tree" ]]; then
       exit 128
       ;;
   esac
+fi
+if [[ "${1:-}" == "remote" && -z "${2:-}" ]]; then
+  if [[ -n "${GIT_REMOTE_EXIT:-}" && "${GIT_REMOTE_EXIT}" != "0" ]]; then
+    echo "fatal: git remote failed" >&2
+    exit "${GIT_REMOTE_EXIT}"
+  fi
+  if [[ -n "${GIT_REMOTES:-}" ]]; then
+    printf '%s\n' "${GIT_REMOTES}"
+  fi
+  exit 0
+fi
+if [[ "${1:-}" == "ls-remote" && "${2:-}" == "--refs" && "${3:-}" == "--tags" ]]; then
+  remote="${4:-}"
+  if [[ "${remote}" == "--" ]]; then
+    remote="${5:-}"
+  fi
+  if [[ "${GIT_TERMINAL_PROMPT:-}" != "0" ]]; then
+    echo "fatal: GIT_TERMINAL_PROMPT was '${GIT_TERMINAL_PROMPT-<unset>}', prompts are not allowed" >&2
+    exit 1
+  fi
+  if [[ -z "${remote}" ]]; then
+    echo "fatal: missing remote" >&2
+    exit 1
+  fi
+  if [[ "${GIT_LS_REMOTE_EXIT:-0}" != "0" ]]; then
+    if [[ -n "${GIT_LS_REMOTE_STDERR:-}" ]]; then
+      printf '%s\n' "${GIT_LS_REMOTE_STDERR}" >&2
+    else
+      echo "fatal: unable to read tags from '${remote}'" >&2
+    fi
+    exit "${GIT_LS_REMOTE_EXIT}"
+  fi
+  if [[ -n "${GIT_LS_REMOTE_STDERR:-}" ]]; then
+    printf '%s\n' "${GIT_LS_REMOTE_STDERR}" >&2
+  fi
+  if [[ -n "${GIT_LS_REMOTE_TAGS_FILE:-}" && -f "${GIT_LS_REMOTE_TAGS_FILE}" ]]; then
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      [[ -z "${line}" ]] && continue
+      if [[ "${line}" == refs/* ]]; then
+        printf '1111111111111111111111111111111111111111\t%s\n' "${line}"
+      else
+        printf '1111111111111111111111111111111111111111\trefs/tags/%s\n' "${line}"
+      fi
+    done < "${GIT_LS_REMOTE_TAGS_FILE}"
+  fi
+  exit 0
 fi
 if [[ "${1:-}" == "tag" && -z "${2:-}" ]]; then
   if [[ "${GIT_TAG_EXIT:-0}" != "0" ]]; then
@@ -294,6 +346,12 @@ run_script() {
   local log="${outfile}.log"
 
   export GIT_TAGS_FILE="$tags_file"
+  export GIT_REMOTES="${GIT_REMOTES-}"
+  export GIT_REMOTE_EXIT="${GIT_REMOTE_EXIT-}"
+  export GIT_LS_REMOTE_EXIT="${GIT_LS_REMOTE_EXIT-}"
+  export GIT_LS_REMOTE_STDERR="${GIT_LS_REMOTE_STDERR-}"
+  export GIT_LS_REMOTE_TAGS_FILE="${GIT_LS_REMOTE_TAGS_FILE-}"
+  export GIT_COMMAND_LOG="${GIT_COMMAND_LOG-}"
   export PARAM_OUTFILE="$outfile"
   export PARAM_PACKAGE="$package"
   export CIRCLE_TAG="$circle_tag"
@@ -946,6 +1004,10 @@ assert_history_refused() {
     fail_case "$name" "expected a non-zero exit" "tags:" "$actual"
     return
   fi
+  if [[ ! -f "$outfile" ]] || ! grep -Fxq -- "${circle_tag#v}" "$outfile"; then
+    fail_case "$name" "missing exact tag ${circle_tag#v}" "$(cat "$outfile" 2>/dev/null || true)"
+    return
+  fi
   if [[ -f "$outfile" ]] && grep -qx 'latest' "$outfile"; then
     fail_case "$name" "wrote latest from an unreadable history" "$(cat "$outfile")"
     return
@@ -1017,21 +1079,343 @@ init_real_repo() {
   "$REAL_GIT" -C "$repo" commit -q -m init
 }
 
+# Failure must keep the immutable version and withhold every floating tag.
+assert_withheld() {
+  local name="$1"
+  local outfile="$2"
+  local status="$3"
+  local exact="$4"
+  local log="${outfile}.log"
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "$name" "exit 0" "$(cat "$outfile" 2>/dev/null || true)"
+    return
+  fi
+  if [[ ! -f "$outfile" ]] || ! grep -Fxq -- "$exact" "$outfile"; then
+    fail_case "$name" "missing exact tag ${exact}" "$(cat "$outfile" 2>/dev/null || true)"
+    return
+  fi
+  if grep -Exq 'latest|[0-9]+|[0-9]+\.[0-9]+' "$outfile"; then
+    fail_case "$name" "wrote a floating tag" "$(cat "$outfile")"
+    return
+  fi
+  if ! grep -F "Refusing to publish latest" "$log" >/dev/null; then
+    fail_case "$name" "missing refusal" "$(cat "$log")"
+    return
+  fi
+  pass_case
+}
+
+run_remote_tag_cases() {
+  local remote_file="${TMP}/remote-tags.txt"
+  local local_file="${TMP}/local-tags.txt"
+  local outfile="${TMP}/remote-out.txt"
+  local command_log="${TMP}/git-commands.log"
+  local status remote_queries
+
+  clear_remote_env() {
+    unset GIT_REMOTES GIT_REMOTE_EXIT GIT_LS_REMOTE_EXIT GIT_LS_REMOTE_STDERR GIT_LS_REMOTE_TAGS_FILE GIT_COMMAND_LOG
+  }
+  clear_remote_env
+
+  # Local history is only the tag being built, as in a depth-1 checkout of that tag.
+  printf '%s\n' "v4.4.7" > "$local_file"
+  printf '%s\n' "v4.4.6" "v4.4.7" "v4.5.0" "v5.0.0" "refs/tags/v5.0.0^{}" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "remote tags keep a shallow v4.4.7 checkout off latest" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4'
+  if ! grep -Fx -- "--no-pager ls-remote --refs --tags -- origin" "$command_log" >/dev/null; then
+    fail_case "shallow v4.4.7 queries origin" "$(cat "$command_log")"
+  elif grep -Eq '(^| )fetch( |$)' "$command_log"; then
+    fail_case "shallow v4.4.7 does not fetch tag objects" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  # A higher tag that exists only in the local clone still counts.
+  printf '%s\n' "v4.4.7" "v9.9.9" > "$local_file"
+  printf '%s\n' "v4.4.7" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "local tag higher than the remote still blocks latest" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4\n4'
+  clear_remote_env
+
+  printf '%s\n' "v1.0.0" > "$local_file"
+  : > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  status="$(run_script "$outfile" "v1.0.0" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "empty remote tag list still publishes latest" \
+    "$outfile" "${outfile}.log" "$status" $'1.0.0\n1.0\n1\nlatest'
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  printf '%s\n' "v5.0.0" > "$remote_file"
+  GIT_REMOTES="upstream"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "the only remote is used when it is not named origin" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4\n4'
+  if ! grep -Fx -- "--no-pager ls-remote --refs --tags -- upstream" "$command_log" >/dev/null; then
+    fail_case "single remote name is upstream" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  printf '%s\n' "v5.0.0" > "$remote_file"
+  GIT_REMOTES=$'upstream\norigin\nfork'
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "origin is used when other remotes exist" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4\n4'
+  remote_queries="$(grep -c 'ls-remote' "$command_log" || true)"
+  if ! grep -Fx -- "--no-pager ls-remote --refs --tags -- origin" "$command_log" >/dev/null; then
+    fail_case "origin is queried by name when it is not the only remote" "$(cat "$command_log")"
+  elif [[ "$remote_queries" -ne 1 ]]; then
+    fail_case "origin is the only remote queried" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  printf '%s\n' "v4.4.8" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "a higher remote patch blocks the minor tag" \
+    "$outfile" "${outfile}.log" "$status" "4.4.7"
+  clear_remote_env
+
+  printf '%s\n' "v5.1.0" > "$local_file"
+  printf '%s\n' "v4.9.9" "v5.0.0" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  status="$(run_script "$outfile" "v5.1.0" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "a release newer than every remote tag publishes latest" \
+    "$outfile" "${outfile}.log" "$status" $'5.1.0\n5.1\n5\nlatest'
+  clear_remote_env
+
+  printf '%s\n' "v1.9.0" > "$local_file"
+  printf '%s\n' "v1.10.0" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  status="$(run_script "$outfile" "v1.9.0" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "remote v1.10.0 blocks the major tag for v1.9.0" \
+    "$outfile" "${outfile}.log" "$status" $'1.9.0\n1.9'
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  printf '%s\n' "v4.4.6" "v4.4.8-rc1" "v4.4.7-rc.1" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "remote pre-releases do not block floating tags" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4\n4\nlatest'
+  clear_remote_env
+
+  printf '%s\n' "services/auth/v1.2.9" > "$local_file"
+  printf '%s\n' "services/auth/v1.2.8" "services/auth/v1.23.0" "services/auth/v1.2.9" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  status="$(run_script "$outfile" "services/auth/v1.2.9" "services/auth" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "remote monorepo tags keep the package prefix" \
+    "$outfile" "${outfile}.log" "$status" $'1.2.9\n1.2'
+  clear_remote_env
+
+  printf '%s\n' "services/auth/v1.2.9" > "$local_file"
+  printf '%s\n' "services/auth/v1.2.9" "v9.9.9" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  status="$(run_script "$outfile" "services/auth/v1.2.9" "services/auth" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "an unprefixed remote tag does not affect a package release" \
+    "$outfile" "${outfile}.log" "$status" $'1.2.9\n1.2\n1\nlatest'
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_EXIT=128
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  assert_withheld "ls-remote failure does not fall back to local tags" "$outfile" "$status" "4.4.7"
+  if ! grep -F "unable to read tags from 'origin'" "${outfile}.log" >/dev/null; then
+    fail_case "ls-remote failure shows git's error" "$(cat "${outfile}.log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_EXIT=128
+  GIT_LS_REMOTE_STDERR="fatal: unable to access 'https://github.com/org/foo@bar see https://x-access-token:gh@s_secret*value@github.com/org/repo.git/': Could not resolve host"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  assert_withheld "ls-remote failure redacts credentials in the remote URL" "$outfile" "$status" "4.4.7"
+  if grep -F "gh@s_secret" "${outfile}.log" >/dev/null || grep -F "secret*value" "${outfile}.log" >/dev/null; then
+    fail_case "ls-remote failure redacts credentials in the remote URL" "token was printed"
+  elif ! grep -F "https://github.com/org/foo@bar" "${outfile}.log" >/dev/null; then
+    fail_case "ls-remote failure redacts credentials in the remote URL" "path @ was removed" "$(cat "${outfile}.log")"
+  elif ! grep -F "https://github.com/org/repo.git/" "${outfile}.log" >/dev/null; then
+    fail_case "ls-remote failure redacts credentials in the remote URL" "host was removed" "$(cat "${outfile}.log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  printf '%s\n' "v1.0.0" > "$local_file"
+  : > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  GIT_LS_REMOTE_STDERR="warning: https://github.com/org/foo@bar see https://x-access-token:gh@s_secret*value@github.com/org/repo.git/"
+  status="$(run_script "$outfile" "v1.0.0" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "ls-remote warnings still allow a first release" \
+    "$outfile" "${outfile}.log" "$status" $'1.0.0\n1.0\n1\nlatest'
+  if grep -F "gh@s_secret" "${outfile}.log" >/dev/null || grep -F "secret*value" "${outfile}.log" >/dev/null; then
+    fail_case "ls-remote warnings redact credentials" "token was printed"
+  elif ! grep -F "https://github.com/org/repo.git/" "${outfile}.log" >/dev/null; then
+    fail_case "ls-remote warnings redact credentials" "host was removed" "$(cat "${outfile}.log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  GIT_REMOTES=$'upstream\nfork'
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  assert_withheld "multiple remotes without origin do not publish latest" "$outfile" "$status" "4.4.7"
+  if grep -q 'ls-remote' "$command_log"; then
+    fail_case "multiple remotes without origin do not query a remote" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  printf '%s\n' "v4.4.7" > "$local_file"
+  GIT_REMOTE_EXIT=128
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  assert_withheld "git remote failure does not publish latest" "$outfile" "$status" "4.4.7"
+  clear_remote_env
+
+  printf '%s\n' "v5.0.0" > "$remote_file"
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_EXIT=128
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7-rc1" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "prerelease does not query remotes" \
+    "$outfile" "${outfile}.log" "$status" "4.4.7-rc1"
+  if [[ -s "$command_log" ]]; then
+    fail_case "prerelease does not query git" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  GIT_REMOTES="origin"
+  GIT_LS_REMOTE_EXIT=128
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "" "" "main" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "branch builds do not read tag history" \
+    "$outfile" "${outfile}.log" "$status" $'edge\n'"main-${SHORT_SHA}"
+  if [[ -s "$command_log" ]]; then
+    fail_case "branch builds do not query git" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+}
+
+run_real_git_remote_cases() {
+  local remote="${TMP}/tags.git"
+  local src="${TMP}/tags-src"
+  local shallow="${TMP}/shallow-backport"
+  local outfile="${TMP}/shallow-out.txt"
+  local status=0
+  local local_tags
+
+  "$REAL_GIT" init -q --bare -b main "$remote"
+  "$REAL_GIT" init -q -b main "$src"
+  "$REAL_GIT" -C "$src" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "$src" config user.name "Tag Tests"
+  "$REAL_GIT" -C "$src" remote add origin "$remote"
+  local tag
+  for tag in v4.4.6 v4.4.7 v4.5.0 v5.0.0; do
+    printf '%s\n' "$tag" >> "${src}/README"
+    "$REAL_GIT" -C "$src" add README
+    "$REAL_GIT" -C "$src" commit -q -m "$tag"
+    "$REAL_GIT" -C "$src" tag -a "$tag" -m "$tag"
+  done
+  "$REAL_GIT" -C "$src" push -q origin main
+  "$REAL_GIT" -C "$src" push -q origin --tags
+
+  "$REAL_GIT" -c advice.detachedHead=false clone -q --depth 1 --branch v4.4.7 "file://${remote}" "$shallow"
+  local_tags="$("$REAL_GIT" -C "$shallow" tag)"
+  if [[ "$("$REAL_GIT" -C "$shallow" rev-parse --is-shallow-repository)" != "true" ]]; then
+    fail_case "shallow clone fixture is a shallow repository" \
+      "$("$REAL_GIT" -C "$shallow" rev-parse --is-shallow-repository)"
+  elif [[ "$local_tags" != "v4.4.7" ]]; then
+    fail_case "shallow clone fixture only has v4.4.7" "local tags:" "$local_tags"
+  else
+    pass_case
+  fi
+  run_real_git_script "$shallow" "$outfile" "v4.4.7" "" || status=$?
+  check_output "real shallow clone of v4.4.7 does not take latest" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4'
+  if ! grep -F "Comparing local tags with origin." "${outfile}.log" >/dev/null; then
+    fail_case "real shallow clone reads origin" "$(cat "${outfile}.log")"
+  else
+    pass_case
+  fi
+
+  local bare_first="${TMP}/first.git"
+  local first_clone="${TMP}/first-clone"
+  "$REAL_GIT" init -q --bare -b main "$bare_first"
+  "$REAL_GIT" init -q -b main "${TMP}/first-src"
+  "$REAL_GIT" -C "${TMP}/first-src" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "${TMP}/first-src" config user.name "Tag Tests"
+  printf 'init\n' > "${TMP}/first-src/README"
+  "$REAL_GIT" -C "${TMP}/first-src" add README
+  "$REAL_GIT" -C "${TMP}/first-src" commit -q -m init
+  "$REAL_GIT" -C "${TMP}/first-src" remote add origin "$bare_first"
+  "$REAL_GIT" -C "${TMP}/first-src" push -q origin main
+  "$REAL_GIT" clone -q "file://${bare_first}" "$first_clone"
+  outfile="${TMP}/remote-first-out.txt"
+  status=0
+  run_real_git_script "$first_clone" "$outfile" "v1.0.0" "" || status=$?
+  check_output "real remote with no tags still publishes latest" \
+    "$outfile" "${outfile}.log" "$status" $'1.0.0\n1.0\n1\nlatest'
+
+  local broken="${TMP}/broken-remote"
+  init_real_repo "$broken"
+  "$REAL_GIT" -C "$broken" remote add origin "${TMP}/missing-remote.git"
+  outfile="${TMP}/broken-remote-out.txt"
+  status=0
+  run_real_git_script "$broken" "$outfile" "v4.4.7" "" || status=$?
+  assert_withheld "real unreachable origin does not publish latest" "$outfile" "$status" "4.4.7"
+}
+
 run_real_git_history_cases() {
   local outfile="${TMP}/real-history-out.txt"
   local status=0
   local dir="${TMP}/not-a-repo"
   mkdir -p "$dir"
   run_real_git_script "$dir" "$outfile" "v4.4.7" "" || status=$?
-  if [[ "$status" -eq 0 ]]; then
-    fail_case "real git outside a repo refuses v4.4.7" "exit 0" "$(cat "$outfile" 2>/dev/null || true)"
-  elif [[ -f "$outfile" ]] && grep -qx 'latest' "$outfile"; then
-    fail_case "real git outside a repo refuses v4.4.7" "wrote latest" "$(cat "$outfile")"
-  elif ! grep -F "Refusing to publish latest" "${outfile}.log" >/dev/null; then
-    fail_case "real git outside a repo refuses v4.4.7" "missing refusal" "$(cat "${outfile}.log")"
-  else
-    pass_case
-  fi
+  assert_withheld "real git outside a repo refuses v4.4.7" "$outfile" "$status" "4.4.7"
 
   local repo="${TMP}/first-release"
   init_real_repo "$repo"
@@ -1040,17 +1424,16 @@ run_real_git_history_cases() {
   run_real_git_script "$repo" "$outfile" "v1.0.0" "" || status=$?
   check_output "real git first release with an empty tag list still publishes latest" \
     "$outfile" "${outfile}.log" "$status" $'1.0.0\n1.0\n1\nlatest'
+  if ! grep -F "No git remote; comparing local tags only." "${outfile}.log" >/dev/null; then
+    fail_case "real git first release uses local tags when no remote is configured" "$(tail -n 40 "${outfile}.log")"
+  else
+    pass_case
+  fi
 
   outfile="${TMP}/gitdir-out.txt"
   status=0
   run_real_git_script "${repo}/.git" "$outfile" "v4.4.7" "" || status=$?
-  if [[ "$status" -eq 0 ]]; then
-    fail_case "real git inside .git is not a work tree" "exit 0" "$(cat "$outfile" 2>/dev/null || true)"
-  elif [[ -f "$outfile" ]] && grep -qx 'latest' "$outfile"; then
-    fail_case "real git inside .git is not a work tree" "wrote latest" "$(cat "$outfile")"
-  else
-    pass_case
-  fi
+  assert_withheld "real git inside .git is not a work tree" "$outfile" "$status" "4.4.7"
 
   local backport="${TMP}/backport"
   init_real_repo "$backport"
@@ -1092,7 +1475,9 @@ main() {
   run_unsupported_tag_cases
   run_populate_tag_cases
   run_unreadable_history_cases
+  run_remote_tag_cases
   run_stress_set
+  run_real_git_remote_cases
   run_real_git_history_cases
   run_real_git_smoke
 

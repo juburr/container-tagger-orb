@@ -43,36 +43,169 @@ truncate -s 0 "${OUTFILE}"
 echo "  Done."
 echo ""
 
-# Read the tag list once and keep its exit status. The old `{ git tag; echo ...; }`
-# group hid a failing `git tag`: echo still succeeded, so the tag being built
-# looked like the only release and took :latest. pipefail does not help, because
-# the group's status is the status of echo. An empty tag list is fine.
+# Read every tag name we can prove exists, and keep each command's exit status.
+# The old `{ git tag; echo ...; }` group hid a failing `git tag`: echo still
+# succeeded, so the tag being built looked like the only release and took
+# :latest. A shallow checkout has the same result with a successful `git tag`:
+# the command exits 0 and lists only the tags inside that shallow history.
+# When a remote exists, its tag names come from `git ls-remote` (names only,
+# not `git fetch --tags`, which would download every tagged commit). If that
+# read fails, local tags are not used instead. An empty list is a first release.
+# Called from `if !`, so `set -e` does not apply in these functions. Every git
+# command checks its own status.
+#
+# Git error text can echo the remote URL, and a CircleCI token often sits in
+# that URL's userinfo. Strip userinfo before printing.
+redact_userinfo() {
+    local line="$1"
+    local out="" rest authority after_auth host
+    rest="${line}"
+    while [[ "${rest}" == *"://"* ]]; do
+        out="${out}${rest%%"://"*}"
+        rest="${rest#*"://"}"
+        # The authority ends at the path, query, fragment, or whitespace.
+        # Userinfo is everything before the last "@" in that authority, which
+        # is where git and curl split even if a password itself contains "@".
+        if [[ "${rest}" == *[[:space:]/?#]* ]]; then
+            authority="${rest%%[[:space:]/?#]*}"
+            after_auth="${rest#"${authority}"}"
+        else
+            authority="${rest}"
+            after_auth=""
+        fi
+        if [[ -n "${authority}" && "${authority}" == *"@"* ]]; then
+            host="${authority##*"@"}"
+            out="${out}://${host}"
+        else
+            out="${out}://${authority}"
+        fi
+        rest="${after_auth}"
+    done
+    printf '%s\n' "${out}${rest}"
+}
+
+print_redacted_file() {
+    local err_file="$1"
+    local line
+    if [[ -z "${err_file}" || ! -s "${err_file}" ]]; then
+        return 0
+    fi
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        redact_userinfo "${line}"
+    done < "${err_file}"
+}
+
+refuse_history() {
+    local message="$1"
+    local err_file="$2"
+    echo "Error: ${message}"
+    print_redacted_file "${err_file}"
+    echo "Refusing to publish latest, major, or minor tags from an incomplete history."
+    rm -f "${err_file}"
+}
+
+append_known_tag() {
+    local name="$1"
+    if [[ -z "${name}" ]]; then
+        return 0
+    fi
+    if [[ -n "${GIT_TAGS}" ]]; then
+        GIT_TAGS+=$'\n'"${name}"
+    else
+        GIT_TAGS="${name}"
+    fi
+}
+
+# ls-remote lines are "<oid><whitespace>refs/tags/<name>". Annotated tags also
+# appear as refs/tags/<name>^{}; those are the same tag and are skipped.
+add_remote_tag_names() {
+    local raw="$1"
+    local line oid ref name
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        [[ -z "${line}" ]] && continue
+        oid="${line%%[[:space:]]*}"
+        ref="${line#"${oid}"}"
+        ref="${ref#"${ref%%[![:space:]]*}"}"
+        if [[ -z "${ref}" || "${ref}" == *'^{}' ]]; then
+            continue
+        fi
+        if [[ "${ref}" != refs/tags/* ]]; then
+            continue
+        fi
+        name="${ref#refs/tags/}"
+        append_known_tag "${name}"
+    done <<< "${raw}"
+}
+
 load_git_tags() {
-    local err_file work_tree
-    err_file=$(mktemp)
-    if ! work_tree=$(git rev-parse --is-inside-work-tree 2>"$err_file"); then
-        echo "Error: git cannot read this checkout, so existing release tags cannot be compared."
-        cat "$err_file"
+    local err_file work_tree remotes line remote_count only_remote saw_origin tag_remote remote_raw
+    err_file=$(mktemp) || {
+        echo "Error: could not create a temporary file, so existing release tags cannot be compared."
         echo "Refusing to publish latest, major, or minor tags from an incomplete history."
-        rm -f "$err_file"
+        return 1
+    }
+    if ! work_tree=$(git rev-parse --is-inside-work-tree 2>"${err_file}"); then
+        refuse_history "git cannot read this checkout, so existing release tags cannot be compared." "${err_file}"
         return 1
     fi
     # `rev-parse` exits 0 and prints "false" inside a .git directory. That is
     # not a checkout this command can trust, even though the command succeeded.
-    if [[ "$work_tree" != "true" ]]; then
-        echo "Error: this directory is not a git work tree, so existing release tags cannot be compared."
-        echo "Refusing to publish latest, major, or minor tags from an incomplete history."
-        rm -f "$err_file"
+    if [[ "${work_tree}" != "true" ]]; then
+        refuse_history "this directory is not a git work tree, so existing release tags cannot be compared." "${err_file}"
         return 1
     fi
-    if ! GIT_TAGS=$(git tag 2>"$err_file"); then
-        echo "Error: git tag failed, so existing release tags cannot be compared."
-        cat "$err_file"
-        echo "Refusing to publish latest, major, or minor tags from an incomplete history."
-        rm -f "$err_file"
+    if ! remotes=$(git --no-pager remote 2>"${err_file}"); then
+        refuse_history "git remote failed, so existing release tags cannot be compared." "${err_file}"
         return 1
     fi
-    rm -f "$err_file"
+
+    remote_count=0
+    only_remote=""
+    saw_origin=0
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        [[ -z "${line}" ]] && continue
+        remote_count=$((remote_count + 1))
+        only_remote="${line}"
+        if [[ "${line}" == "origin" ]]; then
+            saw_origin=1
+        fi
+    done <<< "${remotes}"
+
+    tag_remote=""
+    if [[ "${saw_origin}" -eq 1 ]]; then
+        tag_remote="origin"
+    elif [[ "${remote_count}" -eq 0 ]]; then
+        tag_remote=""
+    elif [[ "${remote_count}" -eq 1 ]]; then
+        tag_remote="${only_remote}"
+    else
+        refuse_history "this checkout has multiple git remotes and none is named origin, so existing release tags cannot be compared." "${err_file}"
+        return 1
+    fi
+
+    if ! GIT_TAGS=$(git --no-pager tag 2>"${err_file}"); then
+        refuse_history "git tag failed, so existing release tags cannot be compared." "${err_file}"
+        return 1
+    fi
+
+    if [[ -n "${tag_remote}" ]]; then
+        echo "  Comparing local tags with ${tag_remote}."
+        # Names only. `--` keeps a remote name from being parsed as an option.
+        # Do not prompt: a missing credential must fail the release, not hang the job.
+        # The remote name is passed, not its URL, so a token in the URL stays out of the process list.
+        if ! remote_raw=$(GIT_TERMINAL_PROMPT=0 git --no-pager ls-remote --refs --tags -- "${tag_remote}" 2>"${err_file}"); then
+            refuse_history "git ls-remote failed for '${tag_remote}', so existing release tags cannot be compared." "${err_file}"
+            return 1
+        fi
+        if [[ -s "${err_file}" ]]; then
+            echo "  git ls-remote stderr:"
+            print_redacted_file "${err_file}"
+        fi
+        add_remote_tag_names "${remote_raw}"
+    else
+        echo "  No git remote; comparing local tags only."
+    fi
+    rm -f "${err_file}"
 }
 
 echo "Generating tags:"
