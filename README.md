@@ -45,6 +45,8 @@ Any merge into `master`, `main`, or `develop` will result in an `:edge` tag bein
 
 Running a Golang monorepo where you're creating tags such as `microservices/authservice/v1.0.5`? No problem. This is supported as well. Currently, you need to supply a `package: microservices/authservice` argument, but this could potentially be determined automatically in a future release.
 
+Only tags in the same namespace are compared when choosing `:latest`, `:X`, and `:X.Y`. With `package: microservices/authservice`, that is exactly `microservices/authservice/vX.Y.Z`; tags such as `microservices/authservice-legacy/v9.0.0` or `microservices/authservice/beta/v9.0.0` are ignored. Without a package, it is `vX.Y.Z` with no slash, so tags such as `zeta/v9.9.9`, `wip-v5.0.0`, or `opengee-v5.3.9` are ignored.
+
 ## Example Usage
 
 The following example shows how to build a container image and then push it to a registry using this orb's automatic tag generation feature.

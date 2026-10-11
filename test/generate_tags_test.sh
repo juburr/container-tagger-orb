@@ -141,13 +141,19 @@ max_version() {
   printf '%s' "$best"
 }
 
+# A package owns exactly "<package>/<version>". No package owns names without
+# a slash. Everything else belongs to some other namespace.
 normalize_repo_tag() {
   local raw="$1"
   local package="$2"
   [[ -n "$raw" ]] || return 1
   if [[ -n "$package" ]]; then
-    [[ "$raw" == "$package"* ]] || return 1
-    raw="${raw/"${package}/"/}"
+    [[ "${raw:0:${#package}+1}" == "${package}/" ]] || return 1
+    raw="${raw:${#package}+1}"
+  else
+    case "$raw" in
+      */*) return 1 ;;
+    esac
   fi
   printf '%s' "$raw"
 }
@@ -755,6 +761,58 @@ run_prerelease_matrix() {
   done
 }
 
+# Tags outside this package's namespace must never outrank the release. The
+# old filter built grep and sed patterns from the package, so an empty package
+# stripped the first slash (zeta/v9.9.9 became zetav9.9.9) and an unanchored
+# match kept wip-v5.0.0. Both sort above v1.0.0, so v1.0.0 lost latest.
+run_foreign_namespace_cases() {
+  golden "slash tag from another namespace does not take latest" \
+    "v1.0.0" "" $'1.0.0\n1.0\n1\nlatest' \
+    "zeta/v9.9.9"
+
+  golden "wip-v5.0.0 is not a release and does not take latest" \
+    "v1.0.0" "" $'1.0.0\n1.0\n1\nlatest' \
+    "wip-v5.0.0"
+
+  golden "foreign opengee-v5.3.9 is not a release of this repository" \
+    "v5.3.8" "" $'5.3.8\n5.3\n5\nlatest' \
+    "opengee-v5.3.9" "v5.3.7"
+
+  golden "another package's tags do not count without a package" \
+    "v1.0.0" "" $'1.0.0\n1.0\n1\nlatest' \
+    "web/v9.0.0" "services/auth/v9.0.0" "x/y/v9.9.9"
+
+  golden "uppercase V9.0.0 is not a release tag" \
+    "v1.0.0" "" $'1.0.0\n1.0\n1\nlatest' \
+    "V9.0.0"
+
+  golden "sibling package web-legacy does not take latest from web" \
+    "web/v1.0.0" "web" $'1.0.0\n1.0\n1\nlatest' \
+    "web-legacy/v9.0.0" "web/v0.9.0"
+
+  golden "nested web/x namespace does not count as web" \
+    "web/v1.0.0" "web" $'1.0.0\n1.0\n1\nlatest' \
+    "web/x/v9.0.0"
+
+  golden "repository-level tags do not count for a package" \
+    "web/v1.0.0" "web" $'1.0.0\n1.0\n1\nlatest' \
+    "v9.0.0" "zeta/v9.9.9" "other/web/v9.0.0"
+
+  golden "package name is literal, not a regex" \
+    "a.b/v1.5.0" "a.b" $'1.5.0\n1.5\n1\nlatest' \
+    "axb/v1.9.0" "axb/v9.0.0" "a.b/v1.4.0"
+
+  local prefix
+  for prefix in "zeta/" "wip-" "opengee-" "x/" "release-" "build/" "z" "~" "V"; do
+    check_against_oracle "foreign prefix '${prefix}' does not outrank v1.0.0" \
+      "v1.0.0" "" \
+      "${prefix}v9.9.9" "${prefix}v1.0.1" "v0.9.0"
+    check_against_oracle "foreign prefix '${prefix}' does not outrank services/auth/v1.0.0" \
+      "services/auth/v1.0.0" "services/auth" \
+      "services/auth/${prefix}v9.9.9" "${prefix}services/auth/v9.9.9" "services/auth-${prefix}v9.9.9" "services/auth/v0.9.0"
+  done
+}
+
 check_unsupported() {
   local name="$1"
   local circle_tag="$2"
@@ -1078,6 +1136,21 @@ run_real_git_smoke() {
     "$outfile" "${outfile}.log" "$status" $'1.9.0\n1.9\n1'
 }
 
+run_real_git_foreign_tags() {
+  local repo="${TMP}/real-foreign"
+  init_real_repo "$repo"
+  "$REAL_GIT" -C "$repo" tag zeta/v9.9.9
+  "$REAL_GIT" -C "$repo" tag wip-v5.0.0
+  "$REAL_GIT" -C "$repo" tag opengee-v5.3.9
+  "$REAL_GIT" -C "$repo" tag v0.9.0
+
+  local outfile="${TMP}/real-foreign-out.txt"
+  local status=0
+  run_real_git_script "$repo" "$outfile" "v1.0.0" "" || status=$?
+  check_output "real git foreign tags do not take latest from v1.0.0" \
+    "$outfile" "${outfile}.log" "$status" $'1.0.0\n1.0\n1\nlatest'
+}
+
 main() {
   assert_sort_agrees_with_oracle
   run_golden_cases
@@ -1089,12 +1162,14 @@ main() {
   run_head_matrix
   run_monorepo_matrix
   run_prerelease_matrix
+  run_foreign_namespace_cases
   run_unsupported_tag_cases
   run_populate_tag_cases
   run_unreadable_history_cases
   run_stress_set
   run_real_git_history_cases
   run_real_git_smoke
+  run_real_git_foreign_tags
 
   printf 'passed=%s failed=%s\n' "$PASSED" "$FAILED"
   if [[ "$FAILED" -ne 0 ]]; then

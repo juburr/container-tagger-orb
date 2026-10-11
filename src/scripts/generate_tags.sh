@@ -75,6 +75,29 @@ load_git_tags() {
     rm -f "$err_file"
 }
 
+# Print the final releases in this package's namespace, one vX.Y.Z per line.
+# A package owns exactly "<package>/vX.Y.Z". No package owns tags without a
+# slash. The old filter built grep and sed patterns from the package, so an
+# empty package turned into s#/## and stripped the first slash of any tag, and
+# its unanchored version match also kept tags such as wip-v5.0.0. Either could
+# outrank this release and take :latest. The prefix is now removed by literal
+# string match, so a package name is never read as a pattern.
+package_final_versions() {
+    local name version
+    while IFS= read -r name; do
+        if [[ -n "${PACKAGE}" ]]; then
+            [[ "${name}" == "${PACKAGE}/"* ]] || continue
+            version="${name#"${PACKAGE}/"}"
+        else
+            [[ "${name}" != */* ]] || continue
+            version="${name}"
+        fi
+        if [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf '%s\n' "${version}"
+        fi
+    done
+}
+
 echo "Generating tags:"
 SHORT_REVISION=$(echo "${CIRCLE_SHA1}" | cut -c 1-8)
 echo "  SHORT_REVISION: ${SHORT_REVISION}"
@@ -111,13 +134,14 @@ if [[ -n "${CIRCLE_TAG}" ]]; then
             exit 1
         fi
 
-        HIGHEST_VERSION=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | grep "^${PACKAGE}" |  sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | sort -r --version-sort | head -n 1)
+        RELEASED_VERSIONS=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | package_final_versions)
+        HIGHEST_VERSION=$(printf '%s\n' "${RELEASED_VERSIONS}" | sort -r --version-sort | head -n 1)
         echo "  HIGHEST_VERSION: ${HIGHEST_VERSION}"
         # Match a whole numeric component. An unescaped "." matches any character,
         # so "v1." also matched v11 and "v1.2." also matched v1.23.
-        HIGHEST_WITH_SAME_MAJOR=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -E "^v${MAJOR_VER}\.[0-9]+\.[0-9]+$" | sort -r --version-sort | head -n 1)
+        HIGHEST_WITH_SAME_MAJOR=$(printf '%s\n' "${RELEASED_VERSIONS}" | grep -E "^v${MAJOR_VER}\.[0-9]+\.[0-9]+$" | sort -r --version-sort | head -n 1)
         echo "  HIGHEST_WITH_SAME_MAJOR: ${HIGHEST_WITH_SAME_MAJOR}"
-        HIGHEST_WITH_SAME_MINOR=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | grep "^${PACKAGE}" | sed "s#${PACKAGE}/##" | grep -E -i 'v[0-9]+\.[0-9]+\.[0-9]+$' | grep -E "^v${MAJOR_VER}\.${MINOR_VER}\.[0-9]+$" | sort -r --version-sort | head -n 1)
+        HIGHEST_WITH_SAME_MINOR=$(printf '%s\n' "${RELEASED_VERSIONS}" | grep -E "^v${MAJOR_VER}\.${MINOR_VER}\.[0-9]+$" | sort -r --version-sort | head -n 1)
         echo "  HIGHEST_WITH_SAME_MINOR: ${HIGHEST_WITH_SAME_MINOR}"
 
 
