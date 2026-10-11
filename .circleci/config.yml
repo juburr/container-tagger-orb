@@ -25,6 +25,43 @@ jobs:
       - run:
           name: Run image digest tests
           command: bash test/populate_image_uri_digest_test.sh
+  test-tag-digest:
+    docker:
+      - image: cimg/base:current
+      # registry:2 at localhost:5000, for copying a multi-platform index by digest.
+      - image: registry:2.8.3
+    environment:
+      CRANE_VERSION: "0.22.1"
+      # sha512sum of go-containerregistry_Linux_x86_64.tar.gz for CRANE_VERSION.
+      CRANE_SHA512: "ce98e3589992cc2381fca98c59dec3437c29de347109a6b919919daaabeb2ed11deac2bbc402739ddd8bec3edcb717e382aef301ffc8d2555d642118a949e68c"
+    steps:
+      - checkout
+      - run:
+          name: Run tag_digest tests
+          command: bash test/tag_digest_test.sh
+      - run:
+          name: Install crane
+          command: |
+            curl -fsSL -o crane.tar.gz "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+            echo "${CRANE_SHA512}  crane.tar.gz" | sha512sum -c -
+            tar -xzf crane.tar.gz crane
+            sudo install -m 0755 crane /usr/local/bin/crane
+            rm crane crane.tar.gz
+            crane version
+      - run:
+          name: Wait for registry
+          command: |
+            for _ in $(seq 1 30); do
+              if curl -fsS http://localhost:5000/v2/ > /dev/null; then
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "registry:2 did not start on localhost:5000"
+            exit 1
+      - run:
+          name: Run tag_digest registry test
+          command: bash test/tag_digest_registry_test.sh
 
 workflows:
   lint-pack:
@@ -32,6 +69,8 @@ workflows:
       - test-tag-selection:
           filters: *filters
       - test-image-digest:
+          filters: *filters
+      - test-tag-digest:
           filters: *filters
       - orb-tools/lint:
           filters: *filters
@@ -46,5 +85,5 @@ workflows:
           pipeline_number: << pipeline.number >>
           vcs_type: << pipeline.project.type >>
           orb_name: container-tagger-orb
-          requires: [test-tag-selection, test-image-digest, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
+          requires: [test-tag-selection, test-image-digest, test-tag-digest, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
           filters: *filters

@@ -110,3 +110,30 @@ usage:
               tags:
                 only: /^v(?!0\d)[0-9]+(\.(?!0\d)[0-9]+){2}(\-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$/
 ```
+
+## Multi-Platform Images
+
+The `tag` and `push` commands work through a local container tool (`docker`, `podman`, or `buildah`), which holds one platform of an image. Pulling a multi-platform image, tagging it, and pushing it again replaces its index with a single-platform manifest.
+
+For an image that is already in a registry, use `tag_digest`. It applies every tag in the tags file to `repository@sha256:<digest>` in place, with `crane tag`, and never pulls or pushes image content. Every tag ends up on the same index digest, with every platform.
+
+```yaml
+- run:
+    name: Authenticate with GHCR
+    command: echo $GITHUB_TOKEN | docker login ghcr.io -u $GITHUB_USER --password-stdin
+- tagger/generate_tags:
+    outfile: tags.txt
+- tagger/tag_digest:
+    # The index digest your build pushed, for example from docker buildx --metadata-file.
+    image_digest: ghcr.io/org/repo/image@${BUILD_DIGEST}
+    tags_file: tags.txt
+```
+
+How it behaves:
+- `crane` must be on `PATH`; this orb does not install it. Registry credentials come from the Docker config, so `docker login` (or `crane auth login`) works.
+- `image_digest` must be `repository@sha256:<64 hex characters>`, and the tags are written to that same repository. To promote into another repository, copy by digest first, for example `crane copy src@sha256:... dst@sha256:...`.
+- Before writing, each tag's current digest is logged as `<tag> <sha256:...>` or `<tag> absent`.
+- `expected_digests_file` takes that same format, one line per tag in the tags file. If any tag no longer matches, no tag is written. Use it to make sure the tags you planned to move have not moved since. The check runs just before writing and is not atomic; registries have no conditional tag write.
+- A tag that already points at the digest is not rewritten.
+- After writing, every tag must resolve to the source digest, or the step fails.
+- If a write fails partway, the log lists the tags that were already written, and their previous digests are logged above it.

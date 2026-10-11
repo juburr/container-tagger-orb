@@ -1,0 +1,31 @@
+description: >
+  Applies every tag in a tags file to an image that is already in a registry, named as repository@sha256:digest,
+  without pulling or pushing image content. Use this for multi-platform images: the tag and push commands pull,
+  retag, and push a single platform, which replaces a multi-platform index with one platform. Each tag's current
+  digest is logged before writing, and every tag must resolve to the source digest afterwards.
+  Requires crane on PATH and registry credentials, for example from docker login.
+parameters:
+  expected_digests_file:
+    type: string
+    default: ""
+    description: >
+      Optional file with one "<tag> <sha256:digest>" or "<tag> absent" line for every tag in tags_file.
+      If any tag currently points elsewhere, no tag is written. The check runs just before writing and is not atomic.
+  image_digest:
+    type: string
+    description: >
+      Repository and digest of the image to tag, for example ghcr.io/org/app@sha256:<64 hex characters> or ${IMAGE_URI_DIGEST}.
+      The tags are written to this repository.
+  tags_file:
+    type: string
+    default: tags.txt
+    description: "The file containing the list of tags to apply, one per line."
+steps:
+  - run:
+      environment:
+        PARAM_EXPECTED_DIGESTS_FILE: << parameters.expected_digests_file >>
+        PARAM_IMAGE_DIGEST: << parameters.image_digest >>
+        PARAM_TAGS_FILE: << parameters.tags_file >>
+      name: Apply Tags To Image Digest In Registry
+      shell: /bin/bash
+      command: <<include(scripts/tag_digest.sh)>>
