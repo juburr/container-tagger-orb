@@ -1,5 +1,6 @@
 description: >
-  Generates tags for a container image.
+  Generates tags for a container image. A final release reads tag names from
+  the checkout and its remote before publishing latest, major, or minor tags.
 parameters:
   outfile:
     type: string
