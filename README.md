@@ -37,13 +37,36 @@ This orb requires that your git tags follow semantic versioning. Examples of val
 - `v2.5.3-alpha1`
 - `v2.5.3-beta4`
 
-`alpha` and `beta` accept the same suffix shapes as `rc`. A tag pipeline whose git tag is not one of these forms fails, instead of publishing that release as `dev-<sha>` or `edge`.
+`alpha` and `beta` accept the same suffix shapes as `rc`. A tag pipeline whose git tag is not one of these forms fails, instead of publishing that release as `dev-<sha>` or `edge`. The same forms apply to the `source_tag` parameter described below.
 
 This orb functions by reading git tags to determine which versions already exist. A final release compares the tag being built with tags in the checkout and with tag names from the checkout's remote. `git ls-remote` supplies those names without downloading tagged commits. An HTTP or HTTPS remote URL that embeds credentials is read without putting those credentials on the git transport command line. An `@` in the repository path stays part of the path. A URL that contains only a username still uses configured credential helpers for its password. `origin` is used when it exists; otherwise the sole remote is used. Several remotes and no `origin` is a failure, so the orb does not guess which remote is authoritative. A shallow checkout whose local `git tag` output contains only the current tag still sees older tags on the remote. If that remote list cannot be read, the release fails, so an older tag cannot take the newest floating tags. A checkout with no remote uses local tags, and an empty list is a first release that still publishes the floating tags. Pre-releases leave floating tags unchanged and skip this check.
 
 Any merge into `master`, `main`, or `develop` will result in an `:edge` tag being created, provided your container build job is within a workflow that builds on non-tagged commits.
 
 Running a Golang monorepo where you're creating tags such as `microservices/authservice/v1.0.5`? No problem. This is supported as well. Currently, you need to supply a `package: microservices/authservice` argument, but this could potentially be determined automatically in a future release.
+
+Only tags in the same namespace are compared when choosing `:latest`, `:X`, and `:X.Y`. With `package: microservices/authservice`, that is exactly `microservices/authservice/vX.Y.Z`; tags such as `microservices/authservice-legacy/v9.0.0` or `microservices/authservice/beta/v9.0.0` are ignored. Without a package, it is `vX.Y.Z` with no slash, so tags such as `zeta/v9.9.9`, `wip-v5.0.0`, or `opengee-v5.3.9` are ignored.
+
+### Releasing without a tag pipeline: `source_tag`
+
+By default the release identity is `CIRCLE_TAG`, and when that is empty, `CIRCLE_BRANCH` selects `:edge` or a `dev-<sha>` tag. Some release workflows do not run from a tag pipeline, for example a protected `release-execution/<tag>` branch that carries its own validated release tag. Pass that tag to both `generate_tags` and `populate_tag` as `source_tag`:
+
+```yaml
+- tagger/populate_tag:
+    source_tag: ${RELEASE_TAG}
+- tagger/generate_tags:
+    source_tag: ${RELEASE_TAG}
+```
+
+When `source_tag` is set:
+- It is the only release identity. `CIRCLE_BRANCH` is not consulted, so a release whose pipeline runs on `main` does not also publish `:edge` or `main-<sha>`.
+- It must be a supported release tag, using the same forms listed above. Anything else fails the step. There is no fallback to `CIRCLE_TAG`, `:edge`, `main-<sha>`, or `dev-<sha>`.
+- If `CIRCLE_TAG` is also set, the two must be identical.
+- With a `package`, it must be the full tag name, `<package>/vX.Y.Z`. A bare `vX.Y.Z` or another package's prefix fails, because those are different git tags. (`CIRCLE_TAG` still also accepts a bare `vX.Y.Z` with a package, for compatibility.)
+- A value that expands to an empty string, such as `${RELEASE_TAG}` when that variable is unset, fails the step instead of falling back. To keep the default behaviour, leave the parameter empty, for example with a pipeline parameter that defaults to `""`.
+- A final release still reads the local `git tag` list to choose `:latest`, `:X`, and `:X.Y`. A branch checkout might not contain every release tag; fetch them first if needed, for example with `git fetch --tags origin`.
+
+Both commands log which identity they used: `source_tag`, `CIRCLE_TAG`, or the branch.
 
 ## Example Usage
 
@@ -54,7 +77,7 @@ usage:
   version: 2.1
 
   orbs:
-    tagger: juburr/container-tagger-orb@0.7.4
+    tagger: juburr/container-tagger-orb@0.8.0
 
   parameters:
     docker_version:
@@ -110,3 +133,30 @@ usage:
               tags:
                 only: /^v(?!0\d)[0-9]+(\.(?!0\d)[0-9]+){2}(\-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$/
 ```
+
+## Multi-Platform Images
+
+The `tag` and `push` commands work through a local container tool (`docker`, `podman`, or `buildah`), which holds one platform of an image. Pulling a multi-platform image, tagging it, and pushing it again replaces its index with a single-platform manifest.
+
+For an image that is already in a registry, use `tag_digest`. It applies every tag in the tags file to `repository@sha256:<digest>` in place, with `crane tag`, and never pulls or pushes image content. Every tag ends up on the same index digest, with every platform.
+
+```yaml
+- run:
+    name: Authenticate with GHCR
+    command: echo $GITHUB_TOKEN | docker login ghcr.io -u $GITHUB_USER --password-stdin
+- tagger/generate_tags:
+    outfile: tags.txt
+- tagger/tag_digest:
+    # The index digest your build pushed, for example from docker buildx --metadata-file.
+    image_digest: ghcr.io/org/repo/image@${BUILD_DIGEST}
+    tags_file: tags.txt
+```
+
+How it behaves:
+- `crane` must be on `PATH`; this orb does not install it. Registry credentials come from the Docker config, so `docker login` (or `crane auth login`) works.
+- `image_digest` must be `repository@sha256:<64 hex characters>`, and the tags are written to that same repository. To promote into another repository, copy by digest first, for example `crane copy src@sha256:... dst@sha256:...`.
+- Before writing, each tag's current digest is logged as `<tag> <sha256:...>` or `<tag> absent`.
+- `expected_digests_file` takes that same format, one line per tag in the tags file. If any tag no longer matches, no tag is written. Use it to make sure the tags you planned to move have not moved since. The check runs just before writing and is not atomic; registries have no conditional tag write.
+- A tag that already points at the digest is not rewritten.
+- After writing, every tag must resolve to the source digest, or the step fails.
+- If a write fails partway, the log lists the tags that were already written, and their previous digests are logged above it.
