@@ -223,15 +223,21 @@ git_config_quote() {
     printf '%s' "${value}"
 }
 
-# 0 when an http(s) URL has userinfo in its authority. "@" in the path,
-# query, or fragment does not count: the authority ends at the first
-# "/", "?", "#", or whitespace.
+# ${var,,} is Bash 4; macOS executors still run Bash 3.2.
+to_lower() {
+    printf '%s' "$1" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz'
+}
+
+# 0 when a URL of any scheme has userinfo in its authority. This is the last
+# check before the transport helper runs, so it does not trust the scheme.
+# "@" in the path, query, or fragment does not count: the authority ends at
+# the first "/", "?", "#", or whitespace.
 url_has_userinfo() {
     local url="$1"
     local rest authority
     case "${url}" in
         *$'\n'*|*$'\r'*) return 0 ;;
-        http://*|https://*|HTTP://*|HTTPS://*) ;;
+        *://*) ;;
         *) return 1 ;;
     esac
     rest="${url#*://}"
@@ -251,6 +257,9 @@ url_has_userinfo() {
 #   2  userinfo is present but cannot be moved safely
 # Git splits userinfo on the first "@" inside the authority, then on the
 # first ":" inside that userinfo. "%40" is decoded only after that split.
+# Schemes are case-insensitive (RFC 3986), and a case-insensitive filesystem
+# finds git-remote-http for HtTp://, so the scheme is lowercased first. The
+# stripped URL uses the lowercase scheme, which every git can resolve.
 classify_remote_url() {
     local url="$1"
     local scheme rest userinfo suffix authority hostport
@@ -267,12 +276,8 @@ classify_remote_url() {
         *://*) ;;
         *) return 1 ;;
     esac
-    scheme="${url%%://*}"
+    scheme=$(to_lower "${url%%://*}")
     rest="${url#*://}"
-    case "${scheme}" in
-        http|https|HTTP|HTTPS) ;;
-        *) return 1 ;;
-    esac
     case "${rest}" in
         *[[:space:]/?#]*)
             authority="${rest%%[[:space:]/?#]*}"
@@ -289,6 +294,19 @@ classify_remote_url() {
     esac
     userinfo="${authority%%@*}"
     hostport="${authority#*@}"
+    case "${scheme}" in
+        http|https) ;;
+        *)
+            # Other transports also get the URL as a helper or ssh argument,
+            # and cannot take a password from a credential helper. A password
+            # there cannot be moved. A bare username (ssh://git@host) is not
+            # a secret and is left alone.
+            case "${userinfo}" in
+                *:*) return 2 ;;
+            esac
+            return 1
+            ;;
+    esac
     case "${userinfo}" in
         *%00*) return 2 ;;
     esac
@@ -309,7 +327,7 @@ classify_remote_url() {
         *%00*|"") return 2 ;;
     esac
     REMOTE_STRIPPED_URL="${scheme}://${hostport}${suffix}"
-    REMOTE_PROTOCOL=$(printf '%s' "${scheme}" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz')
+    REMOTE_PROTOCOL="${scheme}"
     REMOTE_HOST=$(percent_decode "${hostport}") || return 2
     case "${REMOTE_HOST}" in
         *"@"*|*$'\n'*|*$'\r'*|"") return 2 ;;
@@ -320,13 +338,13 @@ classify_remote_url() {
 # Rewrite this one invocation so git-remote-http receives a URL with no
 # userinfo. The checkout's stored remote is not modified. Credential material
 # stays in mode-600 files; it is not placed on a command line.
-# raw_url is the configured remote value before insteadOf. A shorthand such
-# as "work:repo.git" has to be listed or ls-remote starts from that alias
-# and the configured rewrite puts the token back on the helper command line.
+# ls-remote is given the stripped URL, not the remote name, so a shorthand
+# such as "work:repo.git" is never the string insteadOf starts from. The
+# stripped URL maps to itself, which outranks any shorter configured rule
+# that would put credentials back, and the caller probes the final URL.
 write_auth_shield() {
     local dir="$1"
     local effective="$2"
-    local raw_url="$3"
     (
         # The caller is `if ! load_git_tags`, which disables set -e for this
         # whole call stack. Turn it back on so a partial shield is not used.
@@ -334,7 +352,6 @@ write_auth_shield() {
         umask 077
         quoted_base=$(git_config_quote "${REMOTE_STRIPPED_URL}") || exit 1
         quoted_effective=$(git_config_quote "${effective}") || exit 1
-        quoted_raw=$(git_config_quote "${raw_url}") || exit 1
         {
             # No embedded password: keep inherited helpers, and give them the
             # username from this file instead of from the transport URL.
@@ -346,9 +363,6 @@ write_auth_shield() {
             printf '[url "%s"]\n' "${quoted_base}"
             printf '\tinsteadOf = "%s"\n' "${quoted_effective}"
             printf '\tinsteadOf = "%s"\n' "${quoted_base}"
-            if [[ -n "${raw_url}" && "${raw_url}" != "${effective}" && "${raw_url}" != "${REMOTE_STRIPPED_URL}" ]]; then
-                printf '\tinsteadOf = "%s"\n' "${quoted_raw}"
-            fi
         } > "${dir}/rewrite"
         if [[ "${REMOTE_HAS_PASSWORD}" -eq 1 ]]; then
             printf '%s' "${REMOTE_USERNAME}" > "${dir}/username"
@@ -406,7 +420,7 @@ shielded_git() {
 fetch_remote_tag_text() {
     local tag_remote="$1"
     local err_file="$2"
-    local remote_url raw_url classify_status shield_dir ls_status probed_url
+    local remote_url classify_status shield_dir ls_status probed_url
     # classify_remote_url writes these and write_auth_shield reads them.
     # shellcheck disable=SC2034
     local REMOTE_STRIPPED_URL REMOTE_USERNAME REMOTE_PASSWORD REMOTE_HAS_PASSWORD REMOTE_PROTOCOL REMOTE_HOST
@@ -421,18 +435,13 @@ fetch_remote_tag_text() {
         return 1
     fi
     if [[ "${classify_status}" -eq 0 ]]; then
-        # The configured value, before insteadOf. get-url has already expanded aliases.
-        if ! raw_url=$(git --no-pager config --local --get "remote.${tag_remote}.url" 2>"${err_file}"); then
-            refuse_history "git config failed to read the remote URL for '${tag_remote}', so existing release tags cannot be compared." "${err_file}"
-            return 1
-        fi
         shield_dir=$(mktemp -d) || {
             echo "Error: could not create a temporary directory, so existing release tags cannot be compared."
             echo "Refusing to publish latest, major, or minor tags from an incomplete history."
             return 1
         }
         chmod 700 "${shield_dir}"
-        if ! write_auth_shield "${shield_dir}" "${remote_url}" "${raw_url}"; then
+        if ! write_auth_shield "${shield_dir}" "${remote_url}"; then
             rm -rf "${shield_dir}"
             refuse_history "the remote URL for '${tag_remote}' cannot be read without exposing embedded credentials, so existing release tags cannot be compared." "${err_file}"
             return 1

@@ -87,26 +87,6 @@ if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--is-inside-work-tree" ]]; then
       ;;
   esac
 fi
-if [[ "${1:-}" == "config" ]]; then
-  shift
-  if [[ "${1:-}" == "--local" ]]; then
-    shift
-  fi
-  if [[ "${1:-}" == "--get" ]]; then
-    if [[ -n "${GIT_CONFIG_GET_EXIT:-}" && "${GIT_CONFIG_GET_EXIT}" != "0" ]]; then
-      echo "fatal: config get failed" >&2
-      exit "${GIT_CONFIG_GET_EXIT}"
-    fi
-    if [[ -n "${GIT_REMOTE_RAW_URL:-}" ]]; then
-      printf '%s\n' "${GIT_REMOTE_RAW_URL}"
-    elif [[ -n "${GIT_REMOTE_URL:-}" ]]; then
-      printf '%s\n' "${GIT_REMOTE_URL}"
-    else
-      printf '%s\n' "https://example.test/repo.git"
-    fi
-    exit 0
-  fi
-fi
 if [[ "${1:-}" == "remote" && "${2:-}" == "get-url" ]]; then
   if [[ -n "${GIT_REMOTE_GET_URL_EXIT:-}" && "${GIT_REMOTE_GET_URL_EXIT}" != "0" ]]; then
     echo "fatal: No such remote '${3:-}'" >&2
@@ -424,9 +404,7 @@ run_script() {
   export GIT_REMOTES="${GIT_REMOTES-}"
   export GIT_REMOTE_EXIT="${GIT_REMOTE_EXIT-}"
   export GIT_REMOTE_URL="${GIT_REMOTE_URL-}"
-  export GIT_REMOTE_RAW_URL="${GIT_REMOTE_RAW_URL-}"
   export GIT_REMOTE_GET_URL_EXIT="${GIT_REMOTE_GET_URL_EXIT-}"
-  export GIT_CONFIG_GET_EXIT="${GIT_CONFIG_GET_EXIT-}"
   export GIT_LS_REMOTE_EXIT="${GIT_LS_REMOTE_EXIT-}"
   export GIT_LS_REMOTE_STDERR="${GIT_LS_REMOTE_STDERR-}"
   export GIT_LS_REMOTE_TAGS_FILE="${GIT_LS_REMOTE_TAGS_FILE-}"
@@ -1543,7 +1521,7 @@ run_remote_tag_cases() {
   local status remote_queries
 
   clear_remote_env() {
-    unset GIT_REMOTES GIT_REMOTE_EXIT GIT_REMOTE_URL GIT_REMOTE_RAW_URL GIT_REMOTE_GET_URL_EXIT GIT_CONFIG_GET_EXIT GIT_LS_REMOTE_EXIT GIT_LS_REMOTE_STDERR GIT_LS_REMOTE_TAGS_FILE GIT_COMMAND_LOG
+    unset GIT_REMOTES GIT_REMOTE_EXIT GIT_REMOTE_URL GIT_REMOTE_GET_URL_EXIT GIT_LS_REMOTE_EXIT GIT_LS_REMOTE_STDERR GIT_LS_REMOTE_TAGS_FILE GIT_COMMAND_LOG
   }
   clear_remote_env
 
@@ -1821,18 +1799,67 @@ run_remote_tag_cases() {
   fi
   clear_remote_env
 
+  # Schemes are case-insensitive. Each spelling is shielded, and ls-remote
+  # gets the lowercase stripped URL, which every git resolves to its helper.
+  local spelling
+  for spelling in HTTPS HtTpS hTTps; do
+    printf '%s\n' "v4.4.7" > "$local_file"
+    printf '%s\n' "v5.0.0" > "$remote_file"
+    GIT_REMOTES="origin"
+    GIT_REMOTE_URL="${spelling}://x-access-token:ghs_testtoken_not_real@example.test/org/repo.git"
+    GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+    GIT_COMMAND_LOG="$command_log"
+    : > "$GIT_COMMAND_LOG"
+    status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+    check_output "${spelling} credentials are shielded" \
+      "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4\n4'
+    if grep -F "ghs_testtoken_not_real" "$command_log" >/dev/null || grep -F "ghs_testtoken_not_real" "${outfile}.log" >/dev/null; then
+      fail_case "${spelling} credentials stay off the git command line" "token was visible"
+    elif ! grep -F "ls-remote --refs --tags -- https://example.test/org/repo.git" "$command_log" >/dev/null; then
+      fail_case "${spelling} credentials stay off the git command line" "missing lowercase stripped ls-remote" "$(cat "$command_log")"
+    else
+      pass_case
+    fi
+    clear_remote_env
+  done
+
+  # A password on another transport cannot be moved into a credential helper.
+  local bad_url
+  for bad_url in \
+    "ftp://user:ghs_testtoken_not_real@example.test/repo.git" \
+    "FTPS://user:ghs_testtoken_not_real@example.test/repo.git" \
+    "ssh://git:ghs_testtoken_not_real@example.test/repo.git"
+  do
+    printf '%s\n' "v4.4.7" > "$local_file"
+    GIT_REMOTES="origin"
+    GIT_REMOTE_URL="$bad_url"
+    GIT_COMMAND_LOG="$command_log"
+    : > "$GIT_COMMAND_LOG"
+    status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+    assert_withheld "a password in ${bad_url%%://*} URLs does not publish latest" "$outfile" "$status" "4.4.7"
+    if grep -q "ls-remote" "$command_log"; then
+      fail_case "a password in ${bad_url%%://*} URLs does not query the remote" "$(cat "$command_log")"
+    elif grep -F "ghs_testtoken_not_real" "${outfile}.log" >/dev/null; then
+      fail_case "a password in ${bad_url%%://*} URLs is not printed" "token was visible"
+    else
+      pass_case
+    fi
+    clear_remote_env
+  done
+
+  # A bare ssh username is not a secret; that remote is queried by name.
   printf '%s\n' "v4.4.7" > "$local_file"
+  printf '%s\n' "v5.0.0" > "$remote_file"
   GIT_REMOTES="origin"
-  GIT_REMOTE_URL="https://x-access-token:ghs_testtoken_not_real@example.test/org/repo.git"
-  GIT_CONFIG_GET_EXIT=2
+  GIT_REMOTE_URL="ssh://git@example.test/org/repo.git"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
   GIT_COMMAND_LOG="$command_log"
   : > "$GIT_COMMAND_LOG"
   status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
-  assert_withheld "unreadable raw remote URL does not publish latest" "$outfile" "$status" "4.4.7"
-  if grep -q "ls-remote" "$command_log"; then
-    fail_case "unreadable raw remote URL does not query the remote" "$(cat "$command_log")"
-  elif grep -F "ghs_testtoken_not_real" "$command_log" >/dev/null || grep -F "ghs_testtoken_not_real" "${outfile}.log" >/dev/null; then
-    fail_case "unreadable raw remote URL does not print the token" "token was visible"
+  check_output "an ssh username is queried through the remote name" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4\n4'
+  if ! grep -F "ls-remote --refs --tags -- origin" "$command_log" >/dev/null; then
+    fail_case "an ssh username is queried through the remote name" "$(cat "$command_log")"
   else
     pass_case
   fi
@@ -1981,6 +2008,10 @@ ${argv_mark} transport "\$@"
 exec ${wrapper_https} "\$@"
 EOF
   chmod +x "$libexec/git-remote-http" "$libexec/git-remote-https"
+  # On a case-insensitive filesystem (macOS, Windows), git-remote-HtTp is
+  # git-remote-http. Model that here, so a mixed-case scheme reaches the
+  # recording wrapper instead of failing to find a helper.
+  cp "$libexec/git-remote-http" "$libexec/git-remote-HtTp"
   git_wrap="${TMP}/git-wrap"
   mkdir -p "$git_wrap"
   real_git_q=$(printf '%q' "$REAL_GIT")
@@ -2174,6 +2205,50 @@ EOF
     "$outfile" "$status" "4.4.7"
   assert_shielded_fetch "username-only URLs keep inherited password helpers" \
     'ali#ce' 's3cret-from-helper' 's3cret-from-helper'
+
+  # URI schemes are case-insensitive. A mixed-case scheme must be shielded
+  # like http, not handed to a helper with the token in its arguments.
+  repo="${TMP}/cred-mixed-case"
+  outfile="${TMP}/cred-mixed-case-out.txt"
+  "$REAL_GIT" init -q -b main "$repo"
+  "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "$repo" config user.name "Tag Tests"
+  "$REAL_GIT" -C "$repo" remote add origin "HtTp://x-access-token:ghs_testtoken_not_real@127.0.0.1:${port}/repo.git"
+  : > "$argv_log"
+  : > "$auth_log"
+  status=0
+  run_credential_git "$repo" "$outfile" "v4.4.7" || status=$?
+  assert_withheld "mixed-case scheme credentials do not publish latest when the remote read fails" \
+    "$outfile" "$status" "4.4.7"
+  assert_shielded_fetch "mixed-case scheme credentials stay off the transport command line" \
+    "x-access-token" "ghs_testtoken_not_real" "ghs_testtoken_not_real"
+
+  # With extensions.worktreeConfig, the remote can live in config.worktree,
+  # which `git config --local` does not read. The shield must still work.
+  repo="${TMP}/cred-worktree"
+  outfile="${TMP}/cred-worktree-out.txt"
+  "$REAL_GIT" init -q -b main "$repo"
+  "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "$repo" config user.name "Tag Tests"
+  "$REAL_GIT" -C "$repo" config core.repositoryformatversion 1
+  "$REAL_GIT" -C "$repo" config extensions.worktreeConfig true
+  "$REAL_GIT" -C "$repo" config --worktree remote.origin.url "http://x-access-token:ghs_testtoken_not_real@127.0.0.1:${port}/repo.git"
+  "$REAL_GIT" -C "$repo" config --worktree remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+  if "$REAL_GIT" -C "$repo" config --local --get remote.origin.url >/dev/null 2>&1 ||
+    [[ "$("$REAL_GIT" -C "$repo" remote)" != "origin" ]]; then
+    fail_case "worktree config fixture keeps origin out of the local config only" \
+      "$("$REAL_GIT" -C "$repo" config --show-origin --get-all remote.origin.url 2>&1)"
+  else
+    pass_case
+  fi
+  : > "$argv_log"
+  : > "$auth_log"
+  status=0
+  run_credential_git "$repo" "$outfile" "v4.4.7" || status=$?
+  assert_withheld "worktree-config credentials do not publish latest when the remote read fails" \
+    "$outfile" "$status" "4.4.7"
+  assert_shielded_fetch "worktree-config credentials stay off the transport command line" \
+    "x-access-token" "ghs_testtoken_not_real" "ghs_testtoken_not_real"
 
   kill "$SERVER_PID" 2>/dev/null || true
   wait "$SERVER_PID" 2>/dev/null || true
