@@ -1,0 +1,38 @@
+description: >
+  Tag a multi-platform image that is already in a registry, by digest, without pulling or pushing it.
+  The tag and push commands handle one platform, so they would flatten a multi-platform index.
+
+usage:
+  version: 2.1
+
+  orbs:
+    tagger: juburr/container-tagger-orb@0.8.0
+
+  jobs:
+    promote:
+      docker:
+        - image: cimg/base:current-22.04
+      steps:
+        - checkout
+        - run:
+            name: Install crane
+            command: |
+              # Pin the version and verify the archive's checksum in practice.
+              curl -fsSL -o crane.tar.gz https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz
+              tar -xzf crane.tar.gz crane
+              sudo install -m 0755 crane /usr/local/bin/crane
+        - run:
+            name: Authenticate with GHCR
+            command: echo $GITHUB_TOKEN | crane auth login ghcr.io -u $GITHUB_USER --password-stdin
+        - tagger/generate_tags:
+            outfile: tags.txt
+        - tagger/tag_digest:
+            image_digest: ghcr.io/org/repo/image@${BUILD_DIGEST}
+            tags_file: tags.txt
+
+  workflows:
+    release:
+      jobs:
+        - promote:
+            context:
+              - yourproject-github-pkg-rw

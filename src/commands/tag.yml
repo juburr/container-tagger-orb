@@ -1,5 +1,8 @@
 description: >
-  Applies tags to a container image by using a tags file.
+  Applies tags to a container image by using a tags file. Tags are applied in a local container tool, which
+  holds one platform of an image, and the source is pulled first when it is not local. For a multi-platform
+  image already in a registry, use tag_digest instead: pushing a pulled image would replace the multi-platform
+  index with one platform.
 parameters:
   append_tags_to_source:
     type: boolean

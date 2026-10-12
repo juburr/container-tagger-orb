@@ -1,5 +1,6 @@
 description: >
-  Pushes container images to a registry using a tags file.
+  Pushes container images to a registry using a tags file. Each tag is pushed from the local container tool,
+  which holds one platform. For a multi-platform image already in a registry, use tag_digest instead.
 parameters:
   tags_file:
     type: string
