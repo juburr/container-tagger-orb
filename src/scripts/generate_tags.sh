@@ -6,6 +6,8 @@ set +o history
 # Read command arguments
 OUTFILE=$(circleci env subst "${PARAM_OUTFILE}")
 PACKAGE=$(circleci env subst "${PARAM_PACKAGE}")
+SOURCE_TAG_PARAM="${PARAM_SOURCE_TAG-}"
+SOURCE_TAG=$(circleci env subst "${SOURCE_TAG_PARAM}")
 
 # Print arguments for debugging purposes
 echo "Input arguments for tag generation command:"
@@ -15,6 +17,7 @@ echo "  CIRCLE_SHA1: ${CIRCLE_SHA1}"
 echo "  CIRCLE_TAG: ${CIRCLE_TAG}"
 echo "  OUTFILE: ${OUTFILE}"
 echo "  PACKAGE: ${PACKAGE}"
+echo "  SOURCE_TAG: ${SOURCE_TAG}"
 echo ""
 
 # Supported release tags, after an optional package prefix:
@@ -23,14 +26,61 @@ echo ""
 #   v1.2.3-rc, v1.2.3-alpha, v1.2.3-beta
 #   v1.2.3-rc.1, v1.2.3-alpha.1, v1.2.3-beta.2
 # A trailing dot (v1.2.3-rc.) is rejected: that would be an empty identifier.
-TAG="${CIRCLE_TAG#"${PACKAGE}/"}"
 RELEASE_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$'
-if [[ -n "${CIRCLE_TAG}" ]] && [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
-    echo "Error: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag."
-    echo "Expected vMAJOR.MINOR.PATCH with an optional -alpha, -beta, or -rc suffix, for example v2.0.0, v2.0.0-rc1, v2.0.0-rc, or v2.0.0-rc.1."
-    echo "Refusing to publish a dev or edge tag for this tag."
-    exit 1
+RELEASE_TAG_HELP="Expected vMAJOR.MINOR.PATCH with an optional -alpha, -beta, or -rc suffix, for example v2.0.0, v2.0.0-rc1, v2.0.0-rc, or v2.0.0-rc.1."
+
+# Pick the release identity. A set source_tag is the only identity: it must be
+# a supported release tag, and nothing falls back to CIRCLE_TAG, CIRCLE_BRANCH,
+# edge, or a sha tag. With a package it must be the full tag name,
+# <package>/vX.Y.Z, because vX.Y.Z and <package>/vX.Y.Z are different git tags.
+# A parameter that was set but expanded to nothing, such as ${RELEASE_TAG} when
+# that variable is empty, is an error rather than "unset".
+TAG=""
+IDENTITY_SOURCE=""
+if [[ -n "${SOURCE_TAG_PARAM}" ]]; then
+    if [[ -z "${SOURCE_TAG}" ]]; then
+        echo "Error: source_tag '${SOURCE_TAG_PARAM}' expanded to an empty value."
+        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
+        exit 1
+    fi
+    if [[ -n "${CIRCLE_TAG}" && "${CIRCLE_TAG}" != "${SOURCE_TAG}" ]]; then
+        echo "Error: source_tag '${SOURCE_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'."
+        echo "Refusing to choose between two release identities."
+        exit 1
+    fi
+    if [[ -n "${PACKAGE}" ]]; then
+        if [[ "${SOURCE_TAG}" != "${PACKAGE}/"* ]]; then
+            echo "Error: source_tag '${SOURCE_TAG}' is not a tag of package '${PACKAGE}'."
+            echo "With a package, source_tag must be the full tag name, ${PACKAGE}/vMAJOR.MINOR.PATCH."
+            echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
+            exit 1
+        fi
+        TAG="${SOURCE_TAG#"${PACKAGE}/"}"
+    else
+        TAG="${SOURCE_TAG}"
+    fi
+    if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
+        echo "Error: source_tag '${SOURCE_TAG}' is not a supported release tag."
+        echo "${RELEASE_TAG_HELP}"
+        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
+        exit 1
+    fi
+    IDENTITY_SOURCE="source_tag"
+    echo "Release identity: source_tag '${SOURCE_TAG}'. CIRCLE_TAG and CIRCLE_BRANCH are not used."
+elif [[ -n "${CIRCLE_TAG}" ]]; then
+    TAG="${CIRCLE_TAG#"${PACKAGE}/"}"
+    if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
+        echo "Error: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag."
+        echo "${RELEASE_TAG_HELP}"
+        echo "Refusing to publish a dev or edge tag for this tag."
+        exit 1
+    fi
+    IDENTITY_SOURCE="CIRCLE_TAG"
+    echo "Release identity: CIRCLE_TAG '${CIRCLE_TAG}'."
+else
+    echo "Release identity: none. CIRCLE_BRANCH '${CIRCLE_BRANCH}' selects edge or dev tags."
 fi
+echo ""
 
 echo "Computing absolute path for output tag file..."
 OUTFILE=$(realpath --no-symlinks "${OUTFILE}")
@@ -103,8 +153,8 @@ SHORT_REVISION=$(echo "${CIRCLE_SHA1}" | cut -c 1-8)
 echo "  SHORT_REVISION: ${SHORT_REVISION}"
 echo "  TAG: ${TAG}"
 
-if [[ -n "${CIRCLE_TAG}" ]]; then
-    echo "  Processing release as a new tag. The CIRCLE_TAG env var contained a supported release tag."
+if [[ -n "${IDENTITY_SOURCE}" ]]; then
+    echo "  Processing release as a new tag. ${IDENTITY_SOURCE} contained a supported release tag."
     echo "${TAG#v}" >> "${OUTFILE}"
     echo "  Added tag to file: ${TAG#v}"
 

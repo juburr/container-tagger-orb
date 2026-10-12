@@ -72,6 +72,33 @@ jobs:
               exit 1
             fi
             echo "The IMAGE_URI_DIGEST environment variable was set: ${IMAGE_URI_DIGEST}"
+      - run:
+          name: Setup Source Tag Test
+          # On a tag pipeline, CIRCLE_TAG would rightly conflict with this fixed
+          # source_tag. Clear it for the remaining steps so branch and tag
+          # pipelines run the same check.
+          command: |
+            echo "export RELEASE_TAG=v9.8.7-rc.1" >> "${BASH_ENV}"
+            echo "export CIRCLE_TAG=" >> "${BASH_ENV}"
+      - container-tagger-orb/generate_tags:
+          outfile: source-tags.txt
+          source_tag: ${RELEASE_TAG}
+      - container-tagger-orb/populate_tag:
+          source_tag: ${RELEASE_TAG}
+          tag_env_var: SOURCE_TAG_RESULT
+      - run:
+          name: Verify Source Tag Results
+          command: |
+            if [[ "$(cat source-tags.txt)" != "9.8.7-rc.1" ]]; then
+              echo "Expected only 9.8.7-rc.1 in source-tags.txt, got:"
+              cat source-tags.txt
+              exit 1
+            fi
+            if [[ "${SOURCE_TAG_RESULT}" != "9.8.7-rc.1" ]]; then
+              echo "Expected SOURCE_TAG_RESULT=9.8.7-rc.1, got: ${SOURCE_TAG_RESULT}"
+              exit 1
+            fi
+            echo "source_tag produced the exact pre-release tag only."
 workflows:
   test-deploy:
     jobs:

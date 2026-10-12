@@ -9,11 +9,20 @@ parameters:
     type: string
     default: ""
     description: Optional tag prefix, such as those used in Go monorepos.
+  source_tag:
+    type: string
+    default: ""
+    description: >
+      Optional release tag to use instead of CIRCLE_TAG, for releases that do not run from a tag pipeline, for example ${RELEASE_TAG}.
+      When set, it is the only release identity: it must be a supported release tag (with a package, the full <package>/vX.Y.Z name),
+      it must equal CIRCLE_TAG when CIRCLE_TAG is set, and there is no fallback to edge or sha tags.
+      A value that expands to an empty string is an error. Leave empty to use CIRCLE_TAG and CIRCLE_BRANCH.
 steps:
   - run:
       environment:
         PARAM_OUTFILE: << parameters.outfile >>
         PARAM_PACKAGE: << parameters.package >>
+        PARAM_SOURCE_TAG: << parameters.source_tag >>
       name: Generate Tags
       shell: /bin/bash
       command: <<include(scripts/generate_tags.sh)>>
