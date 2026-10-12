@@ -88,8 +88,16 @@ if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--is-inside-work-tree" ]]; then
   esac
 fi
 if [[ "${1:-}" == "remote" && "${2:-}" == "get-url" ]]; then
+  # Like git: a name that looks like an option needs "--" before it.
+  name="${3:-}"
+  if [[ "${name}" == "--" ]]; then
+    name="${4:-}"
+  elif [[ "${name}" == -* ]]; then
+    echo "error: unknown switch \`${name#-}'" >&2
+    exit 129
+  fi
   if [[ -n "${GIT_REMOTE_GET_URL_EXIT:-}" && "${GIT_REMOTE_GET_URL_EXIT}" != "0" ]]; then
-    echo "fatal: No such remote '${3:-}'" >&2
+    echo "fatal: No such remote '${name}'" >&2
     exit "${GIT_REMOTE_GET_URL_EXIT}"
   fi
   if [[ -n "${GIT_REMOTE_URL:-}" ]]; then
@@ -133,6 +141,12 @@ if [[ "${1:-}" == "ls-remote" && "${2:-}" == "--refs" && "${3:-}" == "--tags" ]]
   if [[ -z "${remote}" ]]; then
     echo "fatal: missing remote" >&2
     exit 1
+  fi
+  if [[ -n "${GIT_LS_REMOTE_STARTED:-}" ]]; then
+    : > "${GIT_LS_REMOTE_STARTED}"
+  fi
+  if [[ -n "${GIT_LS_REMOTE_SLEEP:-}" ]]; then
+    sleep "${GIT_LS_REMOTE_SLEEP}"
   fi
   if [[ "${GIT_LS_REMOTE_EXIT:-0}" != "0" ]]; then
     if [[ -n "${GIT_LS_REMOTE_STDERR:-}" ]]; then
@@ -1865,6 +1879,83 @@ run_remote_tag_cases() {
   fi
   clear_remote_env
 
+  # Whitespace does not end a configured URL's authority: git hands the whole
+  # string to the helper, so a space inside the password would hide userinfo.
+  printf '%s\n' "v4.4.7" > "$local_file"
+  GIT_REMOTES="origin"
+  GIT_REMOTE_URL="https://user:ghs_testtoken_not real@example.test/repo.git"
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  assert_withheld "whitespace inside userinfo does not publish latest" "$outfile" "$status" "4.4.7"
+  if grep -q "ls-remote" "$command_log"; then
+    fail_case "whitespace inside userinfo does not query the remote" "$(cat "$command_log")"
+  elif grep -F "testtoken_not" "${outfile}.log" >/dev/null; then
+    fail_case "whitespace inside userinfo is not printed" "token was visible"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  # A sole remote whose name looks like an option is still read.
+  printf '%s\n' "v4.4.7" > "$local_file"
+  printf '%s\n' "v5.0.0" > "$remote_file"
+  GIT_REMOTES="-x"
+  GIT_LS_REMOTE_TAGS_FILE="$remote_file"
+  GIT_COMMAND_LOG="$command_log"
+  : > "$GIT_COMMAND_LOG"
+  status="$(run_script "$outfile" "v4.4.7" "" "" "$SHA" "$local_file" "$FAKE_BIN")"
+  check_output "an option-like remote name is read with --" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4\n4'
+  if ! grep -F -- "remote get-url -- -x" "$command_log" >/dev/null; then
+    fail_case "an option-like remote name is passed after --" "$(cat "$command_log")"
+  else
+    pass_case
+  fi
+  clear_remote_env
+
+  # A signal while ls-remote runs must not leave the credential files behind.
+  local sig_tmp="${TMP}/signal-tmp"
+  local started="${TMP}/ls-remote-started"
+  local sig_pid sig_status=0 spins=0
+  rm -rf "$sig_tmp" "$started"
+  mkdir -p "$sig_tmp"
+  printf '%s\n' "v4.4.7" > "$local_file"
+  env \
+    GIT_TAGS_FILE="$local_file" \
+    GIT_REMOTES="origin" \
+    GIT_REMOTE_URL="https://x-access-token:ghs_testtoken_not_real@example.test/org/repo.git" \
+    GIT_LS_REMOTE_STARTED="$started" \
+    GIT_LS_REMOTE_SLEEP=2 \
+    TMPDIR="$sig_tmp" \
+    PARAM_OUTFILE="$outfile" \
+    PARAM_PACKAGE="" \
+    PARAM_SOURCE_TAG="" \
+    CIRCLE_TAG="v4.4.7" \
+    CIRCLE_BRANCH="" \
+    CIRCLE_SHA1="$SHA" \
+    CIRCLE_BUILD_NUM="1" \
+    LC_ALL=C \
+    PATH="${FAKE_BIN}:${ORIGINAL_PATH}" \
+    bash "$SCRIPT" > "${outfile}.log" 2>&1 &
+  sig_pid=$!
+  while [[ ! -e "$started" && "$spins" -lt 100 ]]; do
+    spins=$((spins + 1))
+    sleep 0.05
+  done
+  kill -TERM "$sig_pid" 2>/dev/null || true
+  wait "$sig_pid" || sig_status=$?
+  if [[ ! -e "$started" ]]; then
+    fail_case "a signal during ls-remote removes the credential files" "ls-remote never started" "$(cat "${outfile}.log")"
+  elif [[ "$sig_status" -eq 0 ]]; then
+    fail_case "a signal during ls-remote fails the release" "exit 0"
+  elif [[ -n "$(find "$sig_tmp" -name password -print -quit)" ]] || grep -rqF "ghs_testtoken_not_real" "$sig_tmp"; then
+    fail_case "a signal during ls-remote removes the credential files" "$(find "$sig_tmp" -print)"
+  else
+    pass_case
+  fi
+  rm -rf "$sig_tmp" "$started"
+
   printf '%s\n' "v4.4.7" > "$local_file"
   GIT_REMOTES="origin"
   GIT_REMOTE_GET_URL_EXIT=128
@@ -1914,6 +2005,15 @@ run_real_git_remote_cases() {
   else
     pass_case
   fi
+
+  local dashed="${TMP}/dashed-remote"
+  init_real_repo "$dashed"
+  "$REAL_GIT" -C "$dashed" remote add -- -x "file://${remote}"
+  outfile="${TMP}/dashed-remote-out.txt"
+  status=0
+  run_real_git_script "$dashed" "$outfile" "v4.4.7" "" || status=$?
+  check_output "real remote named -x is read" \
+    "$outfile" "${outfile}.log" "$status" $'4.4.7\n4.4'
 
   local bare_first="${TMP}/first.git"
   local first_clone="${TMP}/first-clone"
@@ -2205,6 +2305,23 @@ EOF
     "$outfile" "$status" "4.4.7"
   assert_shielded_fetch "username-only URLs keep inherited password helpers" \
     'ali#ce' 's3cret-from-helper' 's3cret-from-helper'
+
+  # A token used as the username, with no helper: git sends "TOKEN:" itself,
+  # so the shield must fall back to that empty password too.
+  repo="${TMP}/cred-token-user"
+  outfile="${TMP}/cred-token-user-out.txt"
+  "$REAL_GIT" init -q -b main "$repo"
+  "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "$repo" config user.name "Tag Tests"
+  "$REAL_GIT" -C "$repo" remote add origin "http://ghs_usernametoken_not_real@127.0.0.1:${port}/repo.git"
+  : > "$argv_log"
+  : > "$auth_log"
+  status=0
+  run_credential_git "$repo" "$outfile" "v4.4.7" || status=$?
+  assert_withheld "token-as-username URLs do not publish latest when the remote read fails" \
+    "$outfile" "$status" "4.4.7"
+  assert_shielded_fetch "token-as-username URLs still send the empty password" \
+    "ghs_usernametoken_not_real" "" "ghs_usernametoken_not_real"
 
   # URI schemes are case-insensitive. A mixed-case scheme must be shielded
   # like http, not handed to a helper with the token in its arguments.

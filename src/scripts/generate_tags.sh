@@ -231,7 +231,8 @@ to_lower() {
 # 0 when a URL of any scheme has userinfo in its authority. This is the last
 # check before the transport helper runs, so it does not trust the scheme.
 # "@" in the path, query, or fragment does not count: the authority ends at
-# the first "/", "?", "#", or whitespace.
+# the first "/", "?", or "#". Whitespace does not end it, because git passes
+# a configured URL to the helper whole, spaces included.
 url_has_userinfo() {
     local url="$1"
     local rest authority
@@ -242,7 +243,7 @@ url_has_userinfo() {
     esac
     rest="${url#*://}"
     case "${rest}" in
-        *[[:space:]/?#]*) authority="${rest%%[[:space:]/?#]*}" ;;
+        *[/?#]*) authority="${rest%%[/?#]*}" ;;
         *) authority="${rest}" ;;
     esac
     case "${authority}" in
@@ -279,8 +280,8 @@ classify_remote_url() {
     scheme=$(to_lower "${url%%://*}")
     rest="${url#*://}"
     case "${rest}" in
-        *[[:space:]/?#]*)
-            authority="${rest%%[[:space:]/?#]*}"
+        *[/?#]*)
+            authority="${rest%%[/?#]*}"
             suffix="${rest#"${authority}"}"
             ;;
         *)
@@ -291,6 +292,11 @@ classify_remote_url() {
     case "${authority}" in
         *"@"*) ;;
         *) return 1 ;;
+    esac
+    # Git hands a configured URL to the helper whole, so whitespace inside
+    # the authority would carry the userinfo along. No valid URL has it.
+    case "${authority}" in
+        *[[:space:]]*) return 2 ;;
     esac
     userinfo="${authority%%@*}"
     hostport="${authority#*@}"
@@ -364,12 +370,14 @@ write_auth_shield() {
             printf '\tinsteadOf = "%s"\n' "${quoted_effective}"
             printf '\tinsteadOf = "%s"\n' "${quoted_base}"
         } > "${dir}/rewrite"
-        if [[ "${REMOTE_HAS_PASSWORD}" -eq 1 ]]; then
-            printf '%s' "${REMOTE_USERNAME}" > "${dir}/username"
-            printf '%s' "${REMOTE_PROTOCOL}" > "${dir}/protocol"
-            printf '%s' "${REMOTE_HOST}" > "${dir}/host"
-            printf '%s' "${REMOTE_PASSWORD}" > "${dir}/password"
-            cat > "${dir}/helper" << 'EOF'
+        # Without an embedded password this is a fallback after inherited
+        # helpers. It answers with an empty password, which is what git itself
+        # sends for https://TOKEN@host when no helper has one.
+        printf '%s' "${REMOTE_USERNAME}" > "${dir}/username"
+        printf '%s' "${REMOTE_PROTOCOL}" > "${dir}/protocol"
+        printf '%s' "${REMOTE_HOST}" > "${dir}/host"
+        printf '%s' "${REMOTE_PASSWORD}" > "${dir}/password"
+        cat > "${dir}/helper" << 'EOF'
 #!/bin/sh
 # Credential helper for one ls-remote. The secret values live in files.
 [ "${1:-}" = "get" ] || exit 0
@@ -391,14 +399,14 @@ fi
 printf '\n'
 exit 0
 EOF
-            chmod 700 "${dir}/helper"
-        fi
+        chmod 700 "${dir}/helper"
     )
 }
 
 # Run git with the shield config. With an embedded password, inherited
 # helpers are cleared so the URL's own credentials stay authoritative.
-# With only a username, inherited helpers still run and can supply the password.
+# With only a username, inherited helpers run first and can supply the
+# password; the shield's helper is appended last as the empty-password fallback.
 shielded_git() {
     local shield_dir="$1"
     shift
@@ -411,10 +419,27 @@ shielded_git() {
             "$@"
         return
     fi
+    CRED_DIR="${shield_dir}" \
     GIT_TERMINAL_PROMPT=0 \
     git -c "include.path=${shield_dir}/rewrite" \
+        -c "credential.helper=${shield_dir}/helper" \
         "$@"
 }
+
+# The shield directory holds the credentials while ls-remote runs. Remove it
+# on every exit, including INT and TERM from a cancelled step, so the token
+# is not left in $TMPDIR on a persistent executor. A trap set while a child
+# runs fires once that child exits.
+SHIELD_DIR=""
+remove_shield_dir() {
+    if [[ -n "${SHIELD_DIR}" ]]; then
+        rm -rf "${SHIELD_DIR}"
+        SHIELD_DIR=""
+    fi
+}
+trap remove_shield_dir EXIT
+trap 'remove_shield_dir; exit 130' INT
+trap 'remove_shield_dir; exit 143' TERM
 
 # Read tag names from the remote. On success, set remote_raw.
 fetch_remote_tag_text() {
@@ -424,7 +449,7 @@ fetch_remote_tag_text() {
     # classify_remote_url writes these and write_auth_shield reads them.
     # shellcheck disable=SC2034
     local REMOTE_STRIPPED_URL REMOTE_USERNAME REMOTE_PASSWORD REMOTE_HAS_PASSWORD REMOTE_PROTOCOL REMOTE_HOST
-    if ! remote_url=$(git --no-pager remote get-url "${tag_remote}" 2>"${err_file}"); then
+    if ! remote_url=$(git --no-pager remote get-url -- "${tag_remote}" 2>"${err_file}"); then
         refuse_history "git remote get-url failed for '${tag_remote}', so existing release tags cannot be compared." "${err_file}"
         return 1
     fi
@@ -435,14 +460,15 @@ fetch_remote_tag_text() {
         return 1
     fi
     if [[ "${classify_status}" -eq 0 ]]; then
-        shield_dir=$(mktemp -d) || {
+        SHIELD_DIR=$(mktemp -d) || {
             echo "Error: could not create a temporary directory, so existing release tags cannot be compared."
             echo "Refusing to publish latest, major, or minor tags from an incomplete history."
             return 1
         }
+        shield_dir="${SHIELD_DIR}"
         chmod 700 "${shield_dir}"
         if ! write_auth_shield "${shield_dir}" "${remote_url}"; then
-            rm -rf "${shield_dir}"
+            remove_shield_dir
             refuse_history "the remote URL for '${tag_remote}' cannot be read without exposing embedded credentials, so existing release tags cannot be compared." "${err_file}"
             return 1
         fi
@@ -455,7 +481,7 @@ fetch_remote_tag_text() {
             shielded_git "${shield_dir}" --no-pager ls-remote --get-url -- "${REMOTE_STRIPPED_URL}" 2>"${err_file}"
         ) || ls_status=$?
         if [[ "${ls_status}" -ne 0 || -z "${probed_url}" ]] || url_has_userinfo "${probed_url}"; then
-            rm -rf "${shield_dir}"
+            remove_shield_dir
             refuse_history "the remote URL for '${tag_remote}' cannot be read without exposing embedded credentials, so existing release tags cannot be compared." "${err_file}"
             return 1
         fi
@@ -463,7 +489,7 @@ fetch_remote_tag_text() {
         remote_raw=$(
             shielded_git "${shield_dir}" --no-pager ls-remote --refs --tags -- "${REMOTE_STRIPPED_URL}" 2>"${err_file}"
         ) || ls_status=$?
-        rm -rf "${shield_dir}"
+        remove_shield_dir
         if [[ "${ls_status}" -ne 0 ]]; then
             refuse_history "git ls-remote failed for '${tag_remote}', so existing release tags cannot be compared." "${err_file}"
             return 1
