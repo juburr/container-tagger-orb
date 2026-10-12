@@ -2323,6 +2323,45 @@ EOF
   assert_shielded_fetch "token-as-username URLs still send the empty password" \
     "ghs_usernametoken_not_real" "" "ghs_usernametoken_not_real"
 
+  # Git runs a credential helper through the shell, so the shield's helper
+  # must still run when TMPDIR contains a space.
+  local spaced_tmp="${TMP}/tmp dir with spaces"
+  mkdir -p "$spaced_tmp"
+  repo="${TMP}/cred-spaced-tmp"
+  outfile="${TMP}/cred-spaced-tmp-out.txt"
+  "$REAL_GIT" init -q -b main "$repo"
+  "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "$repo" config user.name "Tag Tests"
+  "$REAL_GIT" -C "$repo" remote add origin "http://x-access-token:ghs_testtoken_not_real@127.0.0.1:${port}/repo.git"
+  : > "$argv_log"
+  : > "$auth_log"
+  status=0
+  run_credential_git "$repo" "$outfile" "v4.4.7" "$spaced_tmp" || status=$?
+  assert_withheld "a TMPDIR with spaces does not publish latest when the remote read fails" \
+    "$outfile" "$status" "4.4.7"
+  assert_shielded_fetch "embedded credentials still reach the request when TMPDIR has spaces" \
+    "x-access-token" "ghs_testtoken_not_real" "ghs_testtoken_not_real"
+
+  repo="${TMP}/cred-spaced-tmp-user"
+  outfile="${TMP}/cred-spaced-tmp-user-out.txt"
+  "$REAL_GIT" init -q -b main "$repo"
+  "$REAL_GIT" -C "$repo" config user.email "tag-tests@example.com"
+  "$REAL_GIT" -C "$repo" config user.name "Tag Tests"
+  "$REAL_GIT" -C "$repo" remote add origin "http://ghs_usernametoken_not_real@127.0.0.1:${port}/repo.git"
+  : > "$argv_log"
+  : > "$auth_log"
+  status=0
+  run_credential_git "$repo" "$outfile" "v4.4.7" "$spaced_tmp" || status=$?
+  assert_withheld "a TMPDIR with spaces does not publish latest for a token username" \
+    "$outfile" "$status" "4.4.7"
+  assert_shielded_fetch "the empty-password fallback still runs when TMPDIR has spaces" \
+    "ghs_usernametoken_not_real" "" "ghs_usernametoken_not_real"
+  if [[ -n "$(find "$spaced_tmp" -mindepth 1 -type d -print -quit)" ]]; then
+    fail_case "a TMPDIR with spaces is left without shield directories" "$(find "$spaced_tmp" -print)"
+  else
+    pass_case
+  fi
+
   # URI schemes are case-insensitive. A mixed-case scheme must be shielded
   # like http, not handed to a helper with the token in its arguments.
   repo="${TMP}/cred-mixed-case"
@@ -2376,6 +2415,7 @@ run_credential_git() {
   local dir="$1"
   local outfile="$2"
   local circle_tag="$3"
+  local tmpdir="${4:-${TMPDIR:-/tmp}}"
   local argv_log="${TMP}/helper-argv.log"
   local exec_path="${TMP}/git-exec"
   (
@@ -2392,6 +2432,7 @@ run_credential_git() {
       GIT_TERMINAL_PROMPT=0 \
       GIT_EXEC_PATH="$exec_path" \
       ARGV_LOG="$argv_log" \
+      TMPDIR="$tmpdir" \
       PATH="${TMP}/git-wrap:${CIRCLECI_ONLY}:${ORIGINAL_PATH}" \
       timeout 30 bash "$SCRIPT" > "${outfile}.log" 2>&1
   )

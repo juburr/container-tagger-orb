@@ -403,26 +403,37 @@ EOF
     )
 }
 
+# Single-quote a value for /bin/sh. Git runs a credential helper through the
+# shell, so the helper path must survive a TMPDIR that contains spaces.
+sh_quote() {
+    local value="$1"
+    local escaped="'\\''"
+    printf "'%s'" "${value//\'/${escaped}}"
+}
+
 # Run git with the shield config. With an embedded password, inherited
 # helpers are cleared so the URL's own credentials stay authoritative.
 # With only a username, inherited helpers run first and can supply the
 # password; the shield's helper is appended last as the empty-password fallback.
 shielded_git() {
     local shield_dir="$1"
+    local helper
     shift
+    # "!" runs the rest as a shell command, quoted, instead of a bare path.
+    helper="!$(sh_quote "${shield_dir}/helper")"
     if [[ "${REMOTE_HAS_PASSWORD}" -eq 1 ]]; then
         CRED_DIR="${shield_dir}" \
         GIT_TERMINAL_PROMPT=0 \
         git -c "include.path=${shield_dir}/rewrite" \
             -c 'credential.helper=' \
-            -c "credential.helper=${shield_dir}/helper" \
+            -c "credential.helper=${helper}" \
             "$@"
         return
     fi
     CRED_DIR="${shield_dir}" \
     GIT_TERMINAL_PROMPT=0 \
     git -c "include.path=${shield_dir}/rewrite" \
-        -c "credential.helper=${shield_dir}/helper" \
+        -c "credential.helper=${helper}" \
         "$@"
 }
 
