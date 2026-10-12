@@ -37,13 +37,36 @@ This orb requires that your git tags follow semantic versioning. Examples of val
 - `v2.5.3-alpha1`
 - `v2.5.3-beta4`
 
-`alpha` and `beta` accept the same suffix shapes as `rc`. A tag pipeline whose git tag is not one of these forms fails, instead of publishing that release as `dev-<sha>` or `edge`.
+`alpha` and `beta` accept the same suffix shapes as `rc`. A tag pipeline whose git tag is not one of these forms fails, instead of publishing that release as `dev-<sha>` or `edge`. The same forms apply to the `source_tag` parameter described below.
 
 This orb functions by reading your project's local `git tag` list to determine which versions already exist. If that list cannot be read, a final release fails instead of treating the tag being built as the newest version. An empty list is a first release and still publishes the floating tags.
 
 Any merge into `master`, `main`, or `develop` will result in an `:edge` tag being created, provided your container build job is within a workflow that builds on non-tagged commits.
 
 Running a Golang monorepo where you're creating tags such as `microservices/authservice/v1.0.5`? No problem. This is supported as well. Currently, you need to supply a `package: microservices/authservice` argument, but this could potentially be determined automatically in a future release.
+
+Only tags in the same namespace are compared when choosing `:latest`, `:X`, and `:X.Y`. With `package: microservices/authservice`, that is exactly `microservices/authservice/vX.Y.Z`; tags such as `microservices/authservice-legacy/v9.0.0` or `microservices/authservice/beta/v9.0.0` are ignored. Without a package, it is `vX.Y.Z` with no slash, so tags such as `zeta/v9.9.9`, `wip-v5.0.0`, or `opengee-v5.3.9` are ignored.
+
+### Releasing without a tag pipeline: `source_tag`
+
+By default the release identity is `CIRCLE_TAG`, and when that is empty, `CIRCLE_BRANCH` selects `:edge` or a `dev-<sha>` tag. Some release workflows do not run from a tag pipeline, for example a protected `release-execution/<tag>` branch that carries its own validated release tag. Pass that tag to both `generate_tags` and `populate_tag` as `source_tag`:
+
+```yaml
+- tagger/populate_tag:
+    source_tag: ${RELEASE_TAG}
+- tagger/generate_tags:
+    source_tag: ${RELEASE_TAG}
+```
+
+When `source_tag` is set:
+- It is the only release identity. `CIRCLE_BRANCH` is not consulted, so a release whose pipeline runs on `main` does not also publish `:edge` or `main-<sha>`.
+- It must be a supported release tag, using the same forms listed above. Anything else fails the step. There is no fallback to `CIRCLE_TAG`, `:edge`, `main-<sha>`, or `dev-<sha>`.
+- If `CIRCLE_TAG` is also set, the two must be identical.
+- With a `package`, it must be the full tag name, `<package>/vX.Y.Z`. A bare `vX.Y.Z` or another package's prefix fails, because those are different git tags. (`CIRCLE_TAG` still also accepts a bare `vX.Y.Z` with a package, for compatibility.)
+- A value that expands to an empty string, such as `${RELEASE_TAG}` when that variable is unset, fails the step instead of falling back. To keep the default behaviour, leave the parameter empty, for example with a pipeline parameter that defaults to `""`.
+- A final release still reads the local `git tag` list to choose `:latest`, `:X`, and `:X.Y`. A branch checkout might not contain every release tag; fetch them first if needed, for example with `git fetch --tags origin`.
+
+Both commands log which identity they used: `source_tag`, `CIRCLE_TAG`, or the branch.
 
 ## Example Usage
 
