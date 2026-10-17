@@ -62,8 +62,8 @@ image_is_missing() {
     return 1
 }
 
-IMAGE_URI_ENV_VAR=$(circleci env subst "${PARAM_IMAGE_URI_ENV_VAR}")
-IMAGE_URI_DIGEST_ENV_VAR=$(circleci env subst "${PARAM_IMAGE_URI_DIGEST_ENV_VAR}")
+IMAGE_URI_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_URI_ENV_VAR}" | circleci env subst)
+IMAGE_URI_DIGEST_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_URI_DIGEST_ENV_VAR}" | circleci env subst)
 
 echo "Populating image digest environment variable..."
 echo "  IMAGE_URI_ENV_VAR: ${IMAGE_URI_ENV_VAR}"

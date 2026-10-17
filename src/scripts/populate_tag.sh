@@ -11,10 +11,10 @@ set +o history
 # ==========================================
 
 # Read command arguments
-PACKAGE=$(circleci env subst "${PARAM_PACKAGE}")
-TAG_ENV_VAR=$(circleci env subst "${PARAM_TAG_ENV_VAR}")
+PACKAGE=$(printf '%s' "${PARAM_PACKAGE}" | circleci env subst)
+TAG_ENV_VAR=$(printf '%s' "${PARAM_TAG_ENV_VAR}" | circleci env subst)
 SOURCE_TAG_PARAM="${PARAM_SOURCE_TAG-}"
-SOURCE_TAG=$(circleci env subst "${SOURCE_TAG_PARAM}")
+SOURCE_TAG=$(printf '%s' "${SOURCE_TAG_PARAM}" | circleci env subst)
 
 # Print arguments for debugging purposes
 echo "Populating TAG environment variable..."

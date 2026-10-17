@@ -4,10 +4,10 @@ set -e
 set +o history
 
 # Read command arguments
-OUTFILE=$(circleci env subst "${PARAM_OUTFILE}")
-PACKAGE=$(circleci env subst "${PARAM_PACKAGE}")
+OUTFILE=$(printf '%s' "${PARAM_OUTFILE}" | circleci env subst)
+PACKAGE=$(printf '%s' "${PARAM_PACKAGE}" | circleci env subst)
 SOURCE_TAG_PARAM="${PARAM_SOURCE_TAG-}"
-SOURCE_TAG=$(circleci env subst "${SOURCE_TAG_PARAM}")
+SOURCE_TAG=$(printf '%s' "${SOURCE_TAG_PARAM}" | circleci env subst)
 
 # Print arguments for debugging purposes
 echo "Input arguments for tag generation command:"

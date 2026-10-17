@@ -9,6 +9,14 @@ filters: &filters
     only: /.*/
 
 jobs:
+  test-env-subst:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Run circleci env subst tests
+          command: bash test/env_subst_test.sh
   test-tag-selection:
     docker:
       - image: cimg/base:current
@@ -66,6 +74,8 @@ jobs:
 workflows:
   lint-pack:
     jobs:
+      - test-env-subst:
+          filters: *filters
       - test-tag-selection:
           filters: *filters
       - test-image-digest:
@@ -85,5 +95,5 @@ workflows:
           pipeline_number: << pipeline.number >>
           vcs_type: << pipeline.project.type >>
           orb_name: container-tagger-orb
-          requires: [test-tag-selection, test-image-digest, test-tag-digest, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
+          requires: [test-env-subst, test-tag-selection, test-image-digest, test-tag-digest, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
           filters: *filters
