@@ -35,7 +35,13 @@ mkdir -p "$FAKE_BIN" "$NO_CRANE"
 cat > "${FAKE_BIN}/circleci" << 'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "env" && "${2:-}" == "subst" ]]; then
-  input="${3-}"
+  # The scripts pass values on stdin; as an argument, one starting with "-"
+  # would be parsed as a flag by the real CLI.
+  if [[ $# -gt 2 ]]; then
+    printf 'circleci env subst: value passed as an argument: %s\n' "${*:3}" >&2
+    exit 1
+  fi
+  input="$(cat)"
   output=""
   ref_re='^([^$]*)\$\{([A-Za-z_][A-Za-z0-9_]*)\}(.*)$'
   while [[ "$input" =~ $ref_re ]]; do

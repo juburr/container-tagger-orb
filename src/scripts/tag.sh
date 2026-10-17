@@ -5,9 +5,9 @@ set +o history
 
 # Read command arguments
 APPEND_TAGS_TO_SOURCE="${PARAM_APPEND_TAGS_TO_SOURCE}"
-TAGS_FILE=$(circleci env subst "${PARAM_TAGS_FILE}")
-SOURCE_IMAGE=$(circleci env subst "${PARAM_SOURCE_IMAGE}")
-TARGET_IMAGE=$(circleci env subst "${PARAM_TARGET_IMAGE}")
+TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
+SOURCE_IMAGE=$(printf '%s' "${PARAM_SOURCE_IMAGE}" | circleci env subst)
+TARGET_IMAGE=$(printf '%s' "${PARAM_TARGET_IMAGE}" | circleci env subst)
 TOOL="${PARAM_TOOL}"
 
 # Print arguments for debugging purposes

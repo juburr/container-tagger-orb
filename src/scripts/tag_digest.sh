@@ -21,9 +21,9 @@ set +o history
 # Handle Input
 # ==========================================
 
-IMAGE_DIGEST=$(circleci env subst "${PARAM_IMAGE_DIGEST}")
-TAGS_FILE=$(circleci env subst "${PARAM_TAGS_FILE}")
-EXPECTED_FILE=$(circleci env subst "${PARAM_EXPECTED_DIGESTS_FILE}")
+IMAGE_DIGEST=$(printf '%s' "${PARAM_IMAGE_DIGEST}" | circleci env subst)
+TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
+EXPECTED_FILE=$(printf '%s' "${PARAM_EXPECTED_DIGESTS_FILE}" | circleci env subst)
 
 echo "Tagging an image in its registry by digest..."
 echo "  IMAGE_DIGEST: ${IMAGE_DIGEST}"

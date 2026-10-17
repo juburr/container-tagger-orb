@@ -4,8 +4,8 @@ set -e
 set +o history
 
 # Read command arguments
-TAGS_FILE=$(circleci env subst "${PARAM_TAGS_FILE}")
-TARGET_IMAGE=$(circleci env subst "${PARAM_TARGET_IMAGE}")
+TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
+TARGET_IMAGE=$(printf '%s' "${PARAM_TARGET_IMAGE}" | circleci env subst)
 TOOL="${PARAM_TOOL}"
 
 # Print arguments for debugging purposes

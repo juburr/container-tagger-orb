@@ -11,9 +11,9 @@ set +o history
 # ==========================================
 
 # Read command arguments
-IMAGE=$(circleci env subst "${PARAM_IMAGE}")
-IMAGE_URI_ENV_VAR=$(circleci env subst "${PARAM_IMAGE_URI_ENV_VAR}")
-TAG_ENV_VAR=$(circleci env subst "${PARAM_TAG_ENV_VAR}")
+IMAGE=$(printf '%s' "${PARAM_IMAGE}" | circleci env subst)
+IMAGE_URI_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_URI_ENV_VAR}" | circleci env subst)
+TAG_ENV_VAR=$(printf '%s' "${PARAM_TAG_ENV_VAR}" | circleci env subst)
 
 # Print arguments for debugging purposes
 echo "Populating IMAGE_URI environment variable..."

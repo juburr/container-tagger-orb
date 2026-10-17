@@ -34,7 +34,8 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "${TMP}/bin"
 cat > "${TMP}/bin/circleci" << 'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "${3-}"
+# The scripts pass values on stdin, as with the real `circleci env subst`.
+cat
 EOF
 chmod +x "${TMP}/bin/circleci"
 
