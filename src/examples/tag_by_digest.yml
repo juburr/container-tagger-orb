@@ -25,9 +25,9 @@ usage:
             name: Authenticate with GHCR
             command: echo $GITHUB_TOKEN | crane auth login ghcr.io -u $GITHUB_USER --password-stdin
         - tagger/generate_tags:
-            outfile: tags.txt
+            tags_file: tags.txt
         - tagger/tag_digest:
-            image_digest: ghcr.io/org/repo/image@${BUILD_DIGEST}
+            image_digest_ref: ghcr.io/org/repo/image@${BUILD_DIGEST}
             tags_file: tags.txt
 
   workflows:

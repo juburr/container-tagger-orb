@@ -1,0 +1,25 @@
+description: >
+  Exports an image digest reference, <repository>@<digest>, for example ghcr.io/org/repo@sha256:..., to an
+  environment variable for later steps in the job. The digest is read from the registry for the image reference
+  that export_image_ref wrote. Fails when that digest cannot be read. A registry port stays part of the name.
+parameters:
+  image_ref_env_var:
+    type: env_var_name
+    default: "IMAGE_REF"
+    description: >
+      Input: name of the environment variable that already holds the image reference, <image>:<tag>, as written
+      by export_image_ref.
+  image_digest_ref_env_var:
+    type: env_var_name
+    default: "IMAGE_DIGEST_REF"
+    description: >
+      Output: name of the environment variable to write the image digest reference, <repository>@<digest>, to.
+      It is exported to BASH_ENV for later steps in the job, and can be passed to tag_digest as image_digest_ref.
+steps:
+  - run:
+      environment:
+        PARAM_IMAGE_REF_ENV_VAR: << parameters.image_ref_env_var >>
+        PARAM_IMAGE_DIGEST_REF_ENV_VAR: << parameters.image_digest_ref_env_var >>
+      name: Export Image Digest Reference Environment Variable
+      shell: /bin/bash
+      command: <<include(scripts/export_image_digest_ref.sh)>>

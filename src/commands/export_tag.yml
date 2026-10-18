@@ -1,0 +1,33 @@
+description: >
+  Exports the most specific container tag for this build, such as 1.2.3, main-<sha>, or dev-<sha>, to an
+  environment variable for later steps in the job. It is chosen with the same rules as generate_tags.
+parameters:
+  git_tag_prefix:
+    type: string
+    default: ""
+    description: >
+      Optional git tag namespace prefix for monorepos, without a trailing slash. For example, svc/auth matches
+      git tags like svc/auth/v1.2.3. The exported container tag never includes the prefix: svc/auth/v1.2.3
+      exports 1.2.3. Leave empty for tags like v1.2.3.
+  git_tag:
+    type: string
+    default: ""
+    description: >
+      Optional git tag of the release, used instead of CIRCLE_TAG for releases that do not run from a tag pipeline, for example ${RELEASE_TAG}.
+      Same rules as generate_tags: when set, it is the only release identity, it must equal CIRCLE_TAG when CIRCLE_TAG is set,
+      and there is no fallback to sha tags. Leave empty to use CIRCLE_TAG and CIRCLE_BRANCH.
+  tag_env_var:
+    type: env_var_name
+    default: "TAG"
+    description: >
+      Output: name of the environment variable to write the tag to, for example TAG=1.2.3. It is exported to
+      BASH_ENV for later steps in the job. export_image_ref reads it.
+steps:
+  - run:
+      environment:
+        PARAM_GIT_TAG_PREFIX: << parameters.git_tag_prefix >>
+        PARAM_GIT_TAG: << parameters.git_tag >>
+        PARAM_TAG_ENV_VAR: << parameters.tag_env_var >>
+      name: Export Tag Environment Variable
+      shell: /bin/bash
+      command: <<include(scripts/export_tag.sh)>>

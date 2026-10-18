@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Digest publishing for src/scripts/populate_image_uri_digest.sh.
+# Digest publishing for src/scripts/export_image_digest_ref.sh.
 #
 # Locks two failures:
 #   localhost:5000/org/app:1.2.3 must keep the registry port
 #   a failed crane/docker read must exit non-zero and leave BASH_ENV unchanged
 #
 # Run from a checkout:
-#   bash test/populate_image_uri_digest_test.sh
+#   bash test/export_image_digest_ref_test.sh
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT="${DIGEST_SCRIPT:-${ROOT}/src/scripts/populate_image_uri_digest.sh}"
+SCRIPT="${DIGEST_SCRIPT:-${ROOT}/src/scripts/export_image_digest_ref.sh}"
 BASH_BIN="$(command -v bash)"
 
 SHA256="$(printf 'a%.0s' {1..64})"
@@ -137,17 +137,17 @@ clear_tool_env() {
 
 run_script() {
   local path_prefix="$1"
-  local uri_var="$2"
-  local uri="$3"
+  local ref_var="$2"
+  local ref="$3"
   local digest_var="$4"
   local keep_bash_env="${5:-}"
   if [[ -z "$keep_bash_env" ]]; then
     export BASH_ENV="$BASH_ENV_FILE"
   fi
   # shellcheck disable=SC2163
-  export "${uri_var}=${uri}"
-  export PARAM_IMAGE_URI_ENV_VAR="$uri_var"
-  export PARAM_IMAGE_URI_DIGEST_ENV_VAR="$digest_var"
+  export "${ref_var}=${ref}"
+  export PARAM_IMAGE_REF_ENV_VAR="$ref_var"
+  export PARAM_IMAGE_DIGEST_REF_ENV_VAR="$digest_var"
   export CRANE_LOG DOCKER_LOG
   export CRANE_EXIT="${CRANE_EXIT:-0}"
   export CRANE_STDOUT="${CRANE_STDOUT-}"
@@ -183,13 +183,13 @@ assert_unchanged_env() {
 expect_published() {
   local name="$1"
   local path_prefix="$2"
-  local uri="$3"
+  local ref="$3"
   local expected="$4"
-  local uri_var="${5:-IMAGE_URI}"
-  local digest_var="${6:-IMAGE_URI_DIGEST}"
+  local ref_var="${5:-IMAGE_REF}"
+  local digest_var="${6:-IMAGE_DIGEST_REF}"
   reset_outputs
   local status
-  status="$(run_script "$path_prefix" "$uri_var" "$uri" "$digest_var")"
+  status="$(run_script "$path_prefix" "$ref_var" "$ref" "$digest_var")"
   if [[ "$status" -ne 0 ]]; then
     fail_case "$name" "exit ${status}" "$(cat "$LOG")"
     return
@@ -217,8 +217,8 @@ expect_published() {
     fail_case "$name" "digest was not logged" "$(cat "$LOG")"
     return
   fi
-  if grep -F "  DIGEST=${uri}" "$LOG" >/dev/null; then
-    fail_case "$name" "logged the image URI as the digest" "$(cat "$LOG")"
+  if grep -F "  DIGEST=${ref}" "$LOG" >/dev/null; then
+    fail_case "$name" "logged the image reference as the digest" "$(cat "$LOG")"
     return
   fi
   pass_case
@@ -227,14 +227,14 @@ expect_published() {
 expect_refused() {
   local name="$1"
   local path_prefix="$2"
-  local uri="$3"
+  local ref="$3"
   local needle="$4"
-  local uri_var="${5:-IMAGE_URI}"
-  local digest_var="${6:-IMAGE_URI_DIGEST}"
+  local ref_var="${5:-IMAGE_REF}"
+  local digest_var="${6:-IMAGE_DIGEST_REF}"
   local keep_bash_env="${7:-}"
   reset_outputs
   local status
-  status="$(run_script "$path_prefix" "$uri_var" "$uri" "$digest_var" "$keep_bash_env")"
+  status="$(run_script "$path_prefix" "$ref_var" "$ref" "$digest_var" "$keep_bash_env")"
   if [[ "$status" -eq 0 ]]; then
     fail_case "$name" "expected a non-zero exit" "$(cat "$LOG")"
     return
@@ -254,10 +254,10 @@ expect_refused() {
 }
 
 crane_was_called_with() {
-  local uri="$1"
+  local ref="$1"
   local actual
   actual="$(cat "$CRANE_LOG")"
-  [[ "$actual" == "digest ${uri}" ]]
+  [[ "$actual" == "digest ${ref}" ]]
 }
 
 run_reference_cases() {
@@ -274,20 +274,20 @@ run_reference_cases() {
     "docker.io/library/ubuntu:22.04|docker.io/library/ubuntu"
     "[::1]:5000/org/app:1.2.3|[::1]:5000/org/app"
   )
-  local entry uri name
+  local entry ref name
   for entry in "${cases[@]}"; do
-    uri="${entry%%|*}"
+    ref="${entry%%|*}"
     name="${entry#*|}"
     clear_tool_env
     CRANE_STDOUT="sha256:${SHA256}"
-    expect_published "crane ${uri}" "$BOTH" "$uri" "${name}@sha256:${SHA256}"
-    if ! crane_was_called_with "$uri"; then
-      fail_case "crane argv ${uri}" "got [$(cat "$CRANE_LOG")]"
+    expect_published "crane ${ref}" "$BOTH" "$ref" "${name}@sha256:${SHA256}"
+    if ! crane_was_called_with "$ref"; then
+      fail_case "crane argv ${ref}" "got [$(cat "$CRANE_LOG")]"
     else
       pass_case
     fi
     if [[ -s "$DOCKER_LOG" ]]; then
-      fail_case "crane preferred over docker for ${uri}" "$(cat "$DOCKER_LOG")"
+      fail_case "crane preferred over docker for ${ref}" "$(cat "$DOCKER_LOG")"
     else
       pass_case
     fi
@@ -347,17 +347,17 @@ run_digest_shape_cases() {
 }
 
 run_docker_cases() {
-  local uri="localhost:5000/org/app:1.2.3"
+  local ref="localhost:5000/org/app:1.2.3"
   clear_tool_env
   DOCKER_LOCAL_EXIT=0
   DOCKER_REPO_DIGEST="docker.io/library/app@sha256:${SHA256_UPPER}"
-  expect_published "docker rebuilds the requested name and lowercases the digest" "$DOCKER_ONLY" "$uri" "localhost:5000/org/app@sha256:${SHA256}"
-  if grep -F "pull ${uri}" "$DOCKER_LOG" >/dev/null; then
+  expect_published "docker rebuilds the requested name and lowercases the digest" "$DOCKER_ONLY" "$ref" "localhost:5000/org/app@sha256:${SHA256}"
+  if grep -F "pull ${ref}" "$DOCKER_LOG" >/dev/null; then
     fail_case "docker does not pull an image that is already local" "$(cat "$DOCKER_LOG")"
   else
     pass_case
   fi
-  if ! grep -F "image inspect ${uri}" "$DOCKER_LOG" >/dev/null; then
+  if ! grep -F "image inspect ${ref}" "$DOCKER_LOG" >/dev/null; then
     fail_case "docker inspects the original reference" "$(cat "$DOCKER_LOG")"
   else
     pass_case
@@ -370,11 +370,11 @@ run_docker_cases() {
 
   clear_tool_env
   DOCKER_LOCAL_EXIT=1
-  DOCKER_LOCAL_STDERR="Error: No such image: ${uri}"
+  DOCKER_LOCAL_STDERR="Error: No such image: ${ref}"
   DOCKER_PULL_EXIT=0
   DOCKER_REPO_DIGEST="example.com:5000/mirror/app@sha256:${SHA256}"
-  expect_published "docker pulls a missing image and still keeps the port" "$DOCKER_ONLY" "$uri" "localhost:5000/org/app@sha256:${SHA256}"
-  if ! grep -F "pull ${uri}" "$DOCKER_LOG" >/dev/null; then
+  expect_published "docker pulls a missing image and still keeps the port" "$DOCKER_ONLY" "$ref" "localhost:5000/org/app@sha256:${SHA256}"
+  if ! grep -F "pull ${ref}" "$DOCKER_LOG" >/dev/null; then
     fail_case "docker pull was not called" "$(cat "$DOCKER_LOG")"
   else
     pass_case
@@ -382,19 +382,19 @@ run_docker_cases() {
 
   clear_tool_env
   DOCKER_LOCAL_EXIT=1
-  DOCKER_LOCAL_STDERR="error: no such image: ${uri}"
+  DOCKER_LOCAL_STDERR="error: no such image: ${ref}"
   DOCKER_REPO_DIGEST="localhost:5000/org/app@sha256:${SHA256}"
-  expect_published "docker accepts a lowercase missing-image error" "$DOCKER_ONLY" "$uri" "localhost:5000/org/app@sha256:${SHA256}"
+  expect_published "docker accepts a lowercase missing-image error" "$DOCKER_ONLY" "$ref" "localhost:5000/org/app@sha256:${SHA256}"
 }
 
 run_failure_cases() {
-  local uri="localhost:5000/org/app:1.2.3"
+  local ref="localhost:5000/org/app:1.2.3"
 
   clear_tool_env
   CRANE_EXIT=1
   CRANE_STDERR="fatal: registry unreachable"
   DOCKER_REPO_DIGEST="localhost:5000/org/app@sha256:${SHA256}"
-  expect_refused "crane failure does not publish" "$BOTH" "$uri" "crane digest failed for '${uri}'"
+  expect_refused "crane failure does not publish" "$BOTH" "$ref" "crane digest failed for '${ref}'"
   if [[ -s "$DOCKER_LOG" ]]; then
     fail_case "crane failure does not fall through to docker" "$(cat "$DOCKER_LOG")"
   else
@@ -409,38 +409,38 @@ run_failure_cases() {
   clear_tool_env
   CRANE_EXIT=0
   CRANE_STDOUT=""
-  expect_refused "crane empty stdout does not publish" "$BOTH" "$uri" "no registry digest was returned"
+  expect_refused "crane empty stdout does not publish" "$BOTH" "$ref" "no registry digest was returned"
 
   clear_tool_env
   CRANE_STDOUT="sha256:${SHA256:0:63}"
-  expect_refused "crane short digest does not publish" "$BOTH" "$uri" "is not a sha256, sha384, or sha512 digest"
+  expect_refused "crane short digest does not publish" "$BOTH" "$ref" "is not a sha256, sha384, or sha512 digest"
 
   clear_tool_env
   CRANE_STDOUT="<no value>"
-  expect_refused "crane <no value> does not publish" "$BOTH" "$uri" "no registry digest was returned"
+  expect_refused "crane <no value> does not publish" "$BOTH" "$ref" "no registry digest was returned"
 
   clear_tool_env
-  CRANE_STDOUT="$uri"
-  expect_refused "crane image URI is not a digest" "$BOTH" "$uri" "is not a sha256, sha384, or sha512 digest"
+  CRANE_STDOUT="$ref"
+  expect_refused "crane image reference is not a digest" "$BOTH" "$ref" "is not a sha256, sha384, or sha512 digest"
 
   clear_tool_env
   CRANE_STDOUT="sha256:${SHA256} trailing"
-  expect_refused "crane trailing junk does not publish" "$BOTH" "$uri" "is not a sha256, sha384, or sha512 digest"
+  expect_refused "crane trailing junk does not publish" "$BOTH" "$ref" "is not a sha256, sha384, or sha512 digest"
 
   clear_tool_env
   CRANE_STDOUT=$'sha256:'"${SHA256}"$'\nsha256:'"${SHA256}"
-  expect_refused "crane multiline digest does not publish" "$BOTH" "$uri" "is not a sha256, sha384, or sha512 digest"
+  expect_refused "crane multiline digest does not publish" "$BOTH" "$ref" "is not a sha256, sha384, or sha512 digest"
 
   clear_tool_env
-  expect_refused "neither crane nor docker does not publish" "$NEITHER" "$uri" "neither crane nor docker is available"
-
-  clear_tool_env
-  CRANE_STDOUT="sha256:${SHA256}"
-  expect_refused "empty image URI does not publish" "$BOTH" "" "Run populate_image_uri before populate_image_uri_digest."
+  expect_refused "neither crane nor docker does not publish" "$NEITHER" "$ref" "neither crane nor docker is available"
 
   clear_tool_env
   CRANE_STDOUT="sha256:${SHA256}"
-  expect_refused "whitespace in the image URI does not publish" "$BOTH" "ghcr.io/org/repo:1.2.3 extra" "contains whitespace"
+  expect_refused "empty image reference does not publish" "$BOTH" "" "Run export_image_ref before export_image_digest_ref."
+
+  clear_tool_env
+  CRANE_STDOUT="sha256:${SHA256}"
+  expect_refused "whitespace in the image reference does not publish" "$BOTH" "ghcr.io/org/repo:1.2.3 extra" "contains whitespace"
 
   clear_tool_env
   CRANE_STDOUT="sha256:${SHA256}"
@@ -454,7 +454,7 @@ run_failure_cases() {
   CRANE_STDOUT="sha256:${SHA256}"
   reset_outputs
   local status
-  status="$(run_script "$BOTH" "IMAGE_URI" "$uri" "bad-name")"
+  status="$(run_script "$BOTH" "IMAGE_REF" "$ref" "bad-name")"
   if [[ "$status" -eq 0 ]]; then
     fail_case "bad digest env var name" "exit 0" "$(cat "$LOG")"
   elif ! grep -F "is not a shell identifier" "$LOG" >/dev/null; then
@@ -471,7 +471,7 @@ run_failure_cases() {
   CRANE_STDOUT="sha256:${SHA256}"
   reset_outputs
   unset BASH_ENV
-  status="$(run_script "$BOTH" "IMAGE_URI" "$uri" "IMAGE_URI_DIGEST" keep)"
+  status="$(run_script "$BOTH" "IMAGE_REF" "$ref" "IMAGE_DIGEST_REF" keep)"
   if [[ "$status" -eq 0 ]]; then
     fail_case "unset BASH_ENV" "exit 0" "$(cat "$LOG")"
   elif ! grep -F "BASH_ENV is unset" "$LOG" >/dev/null; then
@@ -490,11 +490,11 @@ run_failure_cases() {
   mkdir -p "$env_dir"
   CRANE_STDOUT="sha256:${SHA256}"
   export BASH_ENV="$env_dir"
-  status="$(run_script "$BOTH" "IMAGE_URI" "$uri" "IMAGE_URI_DIGEST" keep)"
+  status="$(run_script "$BOTH" "IMAGE_REF" "$ref" "IMAGE_DIGEST_REF" keep)"
   unset BASH_ENV
   if [[ "$status" -eq 0 ]]; then
     fail_case "unwritable BASH_ENV" "exit 0" "$(cat "$LOG")"
-  elif ! grep -F "export IMAGE_URI_DIGEST=" "$LOG" >/dev/null; then
+  elif ! grep -F "export IMAGE_DIGEST_REF=" "$LOG" >/dev/null; then
     fail_case "unwritable BASH_ENV" "did not reach the export" "$(cat "$LOG")"
   elif grep -F 'Done setting environment variable.' "$LOG" >/dev/null; then
     fail_case "unwritable BASH_ENV still finished" "$(cat "$LOG")"
@@ -510,8 +510,8 @@ run_failure_cases() {
   DOCKER_LOCAL_EXIT=1
   DOCKER_LOCAL_STDERR="Cannot connect to the Docker daemon at unix:///var/run/docker.sock"
   DOCKER_REPO_DIGEST="localhost:5000/org/app@sha256:${SHA256}"
-  expect_refused "docker daemon failure does not pull" "$DOCKER_ONLY" "$uri" "docker image inspect failed"
-  if grep -F "pull ${uri}" "$DOCKER_LOG" >/dev/null; then
+  expect_refused "docker daemon failure does not pull" "$DOCKER_ONLY" "$ref" "docker image inspect failed"
+  if grep -F "pull ${ref}" "$DOCKER_LOG" >/dev/null; then
     fail_case "docker daemon failure still pulled" "$(cat "$DOCKER_LOG")"
   else
     pass_case
@@ -519,10 +519,10 @@ run_failure_cases() {
 
   clear_tool_env
   DOCKER_LOCAL_EXIT=1
-  DOCKER_LOCAL_STDERR="Error: No such image: ${uri}"
+  DOCKER_LOCAL_STDERR="Error: No such image: ${ref}"
   DOCKER_PULL_EXIT=1
-  DOCKER_PULL_STDERR="Error: pull access denied for ${uri}"
-  expect_refused "docker pull failure does not publish" "$DOCKER_ONLY" "$uri" "docker pull failed"
+  DOCKER_PULL_STDERR="Error: pull access denied for ${ref}"
+  expect_refused "docker pull failure does not publish" "$DOCKER_ONLY" "$ref" "docker pull failed"
   if grep -E '^inspect ' "$DOCKER_LOG" >/dev/null; then
     fail_case "docker pull failure still inspected a digest" "$(cat "$DOCKER_LOG")"
   else
@@ -538,23 +538,23 @@ run_failure_cases() {
   DOCKER_LOCAL_EXIT=0
   DOCKER_INSPECT_EXIT=1
   DOCKER_INSPECT_STDERR="Error: inspect failed: daemon disconnected"
-  expect_refused "docker inspect failure does not publish" "$DOCKER_ONLY" "$uri" "docker inspect failed"
+  expect_refused "docker inspect failure does not publish" "$DOCKER_ONLY" "$ref" "docker inspect failed"
 
   clear_tool_env
   DOCKER_LOCAL_EXIT=0
   DOCKER_INSPECT_EXIT=0
   DOCKER_REPO_DIGEST=""
-  expect_refused "docker empty RepoDigest does not publish" "$DOCKER_ONLY" "$uri" "no registry digest was returned"
+  expect_refused "docker empty RepoDigest does not publish" "$DOCKER_ONLY" "$ref" "no registry digest was returned"
 
   clear_tool_env
   DOCKER_LOCAL_EXIT=0
   DOCKER_REPO_DIGEST="<no value>"
-  expect_refused "docker <no value> RepoDigest does not publish" "$DOCKER_ONLY" "$uri" "no registry digest was returned"
+  expect_refused "docker <no value> RepoDigest does not publish" "$DOCKER_ONLY" "$ref" "no registry digest was returned"
 
   clear_tool_env
   DOCKER_LOCAL_EXIT=0
   DOCKER_REPO_DIGEST="localhost:5000/org/app@sha256:${SHA256:0:10}"
-  expect_refused "docker short RepoDigest does not publish" "$DOCKER_ONLY" "$uri" "is not a sha256, sha384, or sha512 digest"
+  expect_refused "docker short RepoDigest does not publish" "$DOCKER_ONLY" "$ref" "is not a sha256, sha384, or sha512 digest"
 }
 
 main() {

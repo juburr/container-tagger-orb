@@ -21,12 +21,24 @@ set +o history
 # Handle Input
 # ==========================================
 
-IMAGE_DIGEST=$(printf '%s' "${PARAM_IMAGE_DIGEST}" | circleci env subst)
+IMAGE_DIGEST_REF=$(printf '%s' "${PARAM_IMAGE_DIGEST_REF}" | circleci env subst)
 TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
 EXPECTED_FILE=$(printf '%s' "${PARAM_EXPECTED_DIGESTS_FILE}" | circleci env subst)
 
+# The shell expands ~ only in words it parses itself, so a parameter value such
+# as ~/workspace/tags.txt arrives with a literal ~. Expand ~ and ~/ the way a
+# shell would; ~user is left alone.
+case "${TAGS_FILE}" in
+    \~) TAGS_FILE="${HOME}" ;;
+    \~/*) TAGS_FILE="${HOME}/${TAGS_FILE#"~/"}" ;;
+esac
+case "${EXPECTED_FILE}" in
+    \~) EXPECTED_FILE="${HOME}" ;;
+    \~/*) EXPECTED_FILE="${HOME}/${EXPECTED_FILE#"~/"}" ;;
+esac
+
 echo "Tagging an image in its registry by digest..."
-echo "  IMAGE_DIGEST: ${IMAGE_DIGEST}"
+echo "  IMAGE_DIGEST_REF: ${IMAGE_DIGEST_REF}"
 echo "  TAGS_FILE: ${TAGS_FILE}"
 echo "  EXPECTED_DIGESTS_FILE: ${EXPECTED_FILE}"
 
@@ -55,28 +67,28 @@ if ! command -v crane >/dev/null 2>&1; then
         "Install it before this step, from https://github.com/google/go-containerregistry/releases, and verify its checksum."
 fi
 
-if [[ -z "${IMAGE_DIGEST}" ]]; then
-    fail "image_digest is empty. Pass REPOSITORY@sha256:DIGEST, for example \${IMAGE_URI_DIGEST} from populate_image_uri_digest."
+if [[ -z "${IMAGE_DIGEST_REF}" ]]; then
+    fail "image_digest_ref is empty. Pass REPOSITORY@sha256:DIGEST, for example \${IMAGE_DIGEST_REF} from export_image_digest_ref."
 fi
-if [[ "${IMAGE_DIGEST}" == *[[:space:]]* ]]; then
-    fail "image_digest '${IMAGE_DIGEST}' contains whitespace."
+if [[ "${IMAGE_DIGEST_REF}" == *[[:space:]]* ]]; then
+    fail "image_digest_ref '${IMAGE_DIGEST_REF}' contains whitespace."
 fi
-if [[ "${IMAGE_DIGEST}" != *@* ]]; then
-    fail "image_digest '${IMAGE_DIGEST}' is not REPOSITORY@sha256:DIGEST. A tag is not enough, because a tag can move."
+if [[ "${IMAGE_DIGEST_REF}" != *@* ]]; then
+    fail "image_digest_ref '${IMAGE_DIGEST_REF}' is not REPOSITORY@sha256:DIGEST. A tag is not enough, because a tag can move."
 fi
-REPOSITORY="${IMAGE_DIGEST%@*}"
-DIGEST="${IMAGE_DIGEST##*@}"
+REPOSITORY="${IMAGE_DIGEST_REF%@*}"
+DIGEST="${IMAGE_DIGEST_REF##*@}"
 REPOSITORY_LAST="${REPOSITORY##*/}"
 if [[ -z "${REPOSITORY}" || -z "${REPOSITORY_LAST}" || "${REPOSITORY}" == *@* ]]; then
-    fail "image_digest '${IMAGE_DIGEST}' does not name a repository."
+    fail "image_digest_ref '${IMAGE_DIGEST_REF}' does not name a repository."
 fi
 # A colon is a tag separator only in the last path component; a registry port
 # (localhost:5000/app) stays part of the name.
 if [[ "${REPOSITORY_LAST}" == *:* ]]; then
-    fail "image_digest '${IMAGE_DIGEST}' has both a tag and a digest. Pass REPOSITORY@sha256:DIGEST only."
+    fail "image_digest_ref '${IMAGE_DIGEST_REF}' has both a tag and a digest. Pass REPOSITORY@sha256:DIGEST only."
 fi
 if [[ ! "${DIGEST}" =~ $DIGEST_RE ]]; then
-    fail "image_digest '${IMAGE_DIGEST}' does not end in a sha256 digest (sha256: and 64 lowercase hex characters)."
+    fail "image_digest_ref '${IMAGE_DIGEST_REF}' does not end in a sha256 digest (sha256: and 64 lowercase hex characters)."
 fi
 echo "  REPOSITORY: ${REPOSITORY}"
 echo "  DIGEST: ${DIGEST}"
@@ -198,18 +210,18 @@ current_digest() {
 }
 
 echo "Checking the source image..."
-if ! SOURCE_CURRENT="$(current_digest "${IMAGE_DIGEST}")"; then
-    echo "Error: could not read '${IMAGE_DIGEST}' from the registry."
+if ! SOURCE_CURRENT="$(current_digest "${IMAGE_DIGEST_REF}")"; then
+    echo "Error: could not read '${IMAGE_DIGEST_REF}' from the registry."
     cat "$err_file"
     exit 1
 fi
 if [[ "${SOURCE_CURRENT}" == "absent" ]]; then
-    fail "'${IMAGE_DIGEST}' was not found in the registry. tag_digest only tags an image that is already there."
+    fail "'${IMAGE_DIGEST_REF}' was not found in the registry. tag_digest only tags an image that is already there."
 fi
 if [[ "${SOURCE_CURRENT}" != "${DIGEST}" ]]; then
-    fail "The registry returned ${SOURCE_CURRENT} for '${IMAGE_DIGEST}'."
+    fail "The registry returned ${SOURCE_CURRENT} for '${IMAGE_DIGEST_REF}'."
 fi
-echo "  Found ${IMAGE_DIGEST}"
+echo "  Found ${IMAGE_DIGEST_REF}"
 
 # Record every tag before any write, so a failed or unwanted run can be undone
 # by tagging the logged digests again.
@@ -254,7 +266,7 @@ for i in "${!TAGS[@]}"; do
         continue
     fi
     echo "  ${REPOSITORY}:${tag} -> ${DIGEST} (was ${CURRENT_VALUES[$i]})"
-    if ! crane tag "${IMAGE_DIGEST}" "${tag}" 2>"$err_file"; then
+    if ! crane tag "${IMAGE_DIGEST_REF}" "${tag}" 2>"$err_file"; then
         echo "Error: crane tag failed for '${REPOSITORY}:${tag}'."
         cat "$err_file"
         if [[ "${#WRITTEN[@]}" -gt 0 ]]; then

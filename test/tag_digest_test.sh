@@ -150,13 +150,13 @@ write_tags() {
   printf '%s\n' "$@" > "${TMP}/tags.txt"
 }
 
-# run_tag_digest IMAGE_DIGEST [EXPECTED_FILE] [PATH_DIR]
+# run_tag_digest IMAGE_DIGEST_REF [EXPECTED_FILE] [PATH_DIR]
 run_tag_digest() {
-  local image_digest="$1"
+  local image_digest_ref="$1"
   local expected="${2-}"
   local path_dir="${3:-$FAKE_BIN}"
   local status=0
-  PARAM_IMAGE_DIGEST="$image_digest" \
+  PARAM_IMAGE_DIGEST_REF="$image_digest_ref" \
     PARAM_TAGS_FILE="${TMP}/tags.txt" \
     PARAM_EXPECTED_DIGESTS_FILE="$expected" \
     PATH="${path_dir}:${ORIGINAL_PATH}" \
@@ -213,7 +213,7 @@ run_input_cases() {
   check_rejected_without_writes "missing crane fails with a clear error" "$status" "crane was not found on PATH."
 
   status="$(run_tag_digest "")"
-  check_rejected_without_writes "empty image_digest" "$status" "image_digest is empty."
+  check_rejected_without_writes "empty image_digest_ref" "$status" "image_digest_ref is empty."
 
   for bad in \
     "${REPO}:1.2.3" \
@@ -228,7 +228,7 @@ run_input_cases() {
   do
     reset_registry
     status="$(run_tag_digest "$bad")"
-    check_rejected_without_writes "rejects image_digest '${bad}'" "$status" "image_digest '${bad}'"
+    check_rejected_without_writes "rejects image_digest_ref '${bad}'" "$status" "image_digest_ref '${bad}'"
   done
 
   reset_registry
@@ -309,9 +309,9 @@ run_happy_cases() {
   reset_registry
   write_tags 1.2.3
   # shellcheck disable=SC2016 # the reference is expanded by the fake circleci
-  status="$(export IMAGE_URI_DIGEST="$SOURCE"; run_tag_digest '${IMAGE_URI_DIGEST}')"
+  status="$(export IMAGE_DIGEST_REF="$SOURCE"; run_tag_digest '${IMAGE_DIGEST_REF}')"
   if [[ "$status" -ne 0 || "$(tag_value 1.2.3)" != "$DIGEST" ]]; then
-    fail_case "expands image_digest from an environment variable" "$(cat "${TMP}/run.log")"
+    fail_case "expands image_digest_ref from an environment variable" "$(cat "${TMP}/run.log")"
   else
     pass_case
   fi

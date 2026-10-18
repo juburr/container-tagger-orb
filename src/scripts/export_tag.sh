@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# This script adds a tag to the job's environment by placing it in .bashrc.
-# This ensures future steps within the same job have access to it.
+# Export the most specific container tag to the job's environment through
+# BASH_ENV, so later steps in the same job can read it.
 
 set -e
 set +o history
@@ -11,16 +11,16 @@ set +o history
 # ==========================================
 
 # Read command arguments
-PACKAGE=$(printf '%s' "${PARAM_PACKAGE}" | circleci env subst)
+GIT_TAG_PREFIX=$(printf '%s' "${PARAM_GIT_TAG_PREFIX}" | circleci env subst)
 TAG_ENV_VAR=$(printf '%s' "${PARAM_TAG_ENV_VAR}" | circleci env subst)
-SOURCE_TAG_PARAM="${PARAM_SOURCE_TAG-}"
-SOURCE_TAG=$(printf '%s' "${SOURCE_TAG_PARAM}" | circleci env subst)
+GIT_TAG_PARAM="${PARAM_GIT_TAG-}"
+GIT_TAG=$(printf '%s' "${GIT_TAG_PARAM}" | circleci env subst)
 
 # Print arguments for debugging purposes
-echo "Populating TAG environment variable..."
-echo "  PACKAGE: ${PACKAGE}"
+echo "Exporting the tag environment variable..."
+echo "  GIT_TAG_PREFIX: ${GIT_TAG_PREFIX}"
 echo "  TAG_ENV_VAR: ${TAG_ENV_VAR}"
-echo "  SOURCE_TAG: ${SOURCE_TAG}"
+echo "  GIT_TAG: ${GIT_TAG}"
 
 # ==========================================
 # Compute Values
@@ -33,40 +33,40 @@ RELEASE_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$'
 RELEASE_TAG_HELP="Expected vMAJOR.MINOR.PATCH with an optional -alpha, -beta, or -rc suffix, for example v2.0.0, v2.0.0-rc1, v2.0.0-rc, or v2.0.0-rc.1."
 
 # Same supported forms and the same identity rules as generate_tags: a set
-# source_tag is the only identity, with no fallback to CIRCLE_TAG, CIRCLE_BRANCH,
-# or a sha tag. With a package it must be the full <package>/vX.Y.Z tag name.
+# git_tag is the only identity, with no fallback to CIRCLE_TAG, CIRCLE_BRANCH,
+# or a sha tag. With a git_tag_prefix it must be the full <prefix>/vX.Y.Z tag name.
 TAG=""
-if [[ -n "${SOURCE_TAG_PARAM}" ]]; then
-    if [[ -z "${SOURCE_TAG}" ]]; then
-        echo "Error: source_tag '${SOURCE_TAG_PARAM}' expanded to an empty value."
+if [[ -n "${GIT_TAG_PARAM}" ]]; then
+    if [[ -z "${GIT_TAG}" ]]; then
+        echo "Error: git_tag '${GIT_TAG_PARAM}' expanded to an empty value."
         echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
         exit 1
     fi
-    if [[ -n "${CIRCLE_TAG}" && "${CIRCLE_TAG}" != "${SOURCE_TAG}" ]]; then
-        echo "Error: source_tag '${SOURCE_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'."
+    if [[ -n "${CIRCLE_TAG}" && "${CIRCLE_TAG}" != "${GIT_TAG}" ]]; then
+        echo "Error: git_tag '${GIT_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'."
         echo "Refusing to choose between two release identities."
         exit 1
     fi
-    if [[ -n "${PACKAGE}" ]]; then
-        if [[ "${SOURCE_TAG}" != "${PACKAGE}/"* ]]; then
-            echo "Error: source_tag '${SOURCE_TAG}' is not a tag of package '${PACKAGE}'."
-            echo "With a package, source_tag must be the full tag name, ${PACKAGE}/vMAJOR.MINOR.PATCH."
+    if [[ -n "${GIT_TAG_PREFIX}" ]]; then
+        if [[ "${GIT_TAG}" != "${GIT_TAG_PREFIX}/"* ]]; then
+            echo "Error: git_tag '${GIT_TAG}' is not in the git_tag_prefix '${GIT_TAG_PREFIX}' namespace."
+            echo "With a git_tag_prefix, git_tag must be the full tag name, ${GIT_TAG_PREFIX}/vMAJOR.MINOR.PATCH."
             echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
             exit 1
         fi
-        TAG="${SOURCE_TAG#"${PACKAGE}/"}"
+        TAG="${GIT_TAG#"${GIT_TAG_PREFIX}/"}"
     else
-        TAG="${SOURCE_TAG}"
+        TAG="${GIT_TAG}"
     fi
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
-        echo "Error: source_tag '${SOURCE_TAG}' is not a supported release tag."
+        echo "Error: git_tag '${GIT_TAG}' is not a supported release tag."
         echo "${RELEASE_TAG_HELP}"
         echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
         exit 1
     fi
-    echo "  Release identity: source_tag '${SOURCE_TAG}'. CIRCLE_TAG and CIRCLE_BRANCH are not used."
+    echo "  Release identity: git_tag '${GIT_TAG}'. CIRCLE_TAG and CIRCLE_BRANCH are not used."
 elif [[ -n "${CIRCLE_TAG}" ]]; then
-    TAG="${CIRCLE_TAG#"${PACKAGE}/"}"
+    TAG="${CIRCLE_TAG#"${GIT_TAG_PREFIX}/"}"
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
         echo "Error: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag."
         echo "${RELEASE_TAG_HELP}"
@@ -88,15 +88,15 @@ fi
 echo "  MOST_SPECIFIC_TAG=${MOST_SPECIFIC_TAG}"
 
 # ==========================================
-# Export to .bashrc
+# Export to BASH_ENV
 # ==========================================
 echo "Exporting value..."
 
-# Adds the most specific tag
+# Adds the most specific tag, shell-quoted so BASH_ENV can source any value.
 #   e.g., export TAG=3.5.3
 if [[ -n "${TAG_ENV_VAR}" ]]; then
     export "${TAG_ENV_VAR}"="${MOST_SPECIFIC_TAG}"
-    echo "export ${TAG_ENV_VAR}=${MOST_SPECIFIC_TAG}" | tee -a "${BASH_ENV}"
+    printf 'export %s=%q\n' "${TAG_ENV_VAR}" "${MOST_SPECIFIC_TAG}" | tee -a "${BASH_ENV}"
 fi
 
 printf "Done setting environment variable."

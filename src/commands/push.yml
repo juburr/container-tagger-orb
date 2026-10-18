@@ -5,7 +5,7 @@ parameters:
   tags_file:
     type: string
     default: tags.txt
-    description: "The file containing the list of tags to apply."
+    description: "Path of the file with the tags to apply, one per line, as written by generate_tags. A leading ~/ is expanded to $HOME."
   target_image:
     type: string
     description: "The target image name."

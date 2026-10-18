@@ -34,7 +34,7 @@ usage:
                 -f containers/prod/localimage/Dockerfile \
                 .
         - tagger/generate_tags:
-            outfile: tags.txt
+            tags_file: tags.txt
         - tagger/tag:
             source_image: localimage
             target_image: ghcr.io/org/repo/image

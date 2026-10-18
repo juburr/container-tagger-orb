@@ -1,0 +1,28 @@
+description: >
+  Exports an image reference, <image>:<tag>, to an environment variable for later steps in the job.
+  The tag is read from the variable that export_tag wrote, so run export_tag first.
+parameters:
+  image:
+    type: string
+    description: "Image repository without a tag, for example ghcr.io/org/app."
+  image_ref_env_var:
+    type: env_var_name
+    default: "IMAGE_REF"
+    description: >
+      Output: name of the environment variable to write the image reference to, for example
+      IMAGE_REF=ghcr.io/org/app:1.2.3. It is exported to BASH_ENV for later steps in the job.
+      export_image_digest_ref reads it.
+  tag_env_var:
+    type: env_var_name
+    default: "TAG"
+    description: >
+      Input: name of the environment variable that already holds the tag, as written by export_tag.
+steps:
+  - run:
+      environment:
+        PARAM_IMAGE: << parameters.image >>
+        PARAM_IMAGE_REF_ENV_VAR: << parameters.image_ref_env_var >>
+        PARAM_TAG_ENV_VAR: << parameters.tag_env_var >>
+      name: Export Image Reference Environment Variable
+      shell: /bin/bash
+      command: <<include(scripts/export_image_ref.sh)>>

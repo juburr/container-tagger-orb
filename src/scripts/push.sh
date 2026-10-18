@@ -8,6 +8,14 @@ TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
 TARGET_IMAGE=$(printf '%s' "${PARAM_TARGET_IMAGE}" | circleci env subst)
 TOOL="${PARAM_TOOL}"
 
+# The shell expands ~ only in words it parses itself, so a parameter value such
+# as ~/workspace/tags.txt arrives with a literal ~. Expand ~ and ~/ the way a
+# shell would; ~user is left alone.
+case "${TAGS_FILE}" in
+    \~) TAGS_FILE="${HOME}" ;;
+    \~/*) TAGS_FILE="${HOME}/${TAGS_FILE#"~/"}" ;;
+esac
+
 # Print arguments for debugging purposes
 echo "Running tagger with arguments:"
 echo "  TAGS_FILE: ${TAGS_FILE}"

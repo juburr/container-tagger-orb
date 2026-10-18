@@ -48,7 +48,7 @@ fail() {
 
 run_tag_digest() {
   local expected="${1-}"
-  PARAM_IMAGE_DIGEST="${REPO}@${DIGEST}" \
+  PARAM_IMAGE_DIGEST_REF="${REPO}@${DIGEST}" \
     PARAM_TAGS_FILE="${TMP}/tags.txt" \
     PARAM_EXPECTED_DIGESTS_FILE="$expected" \
     PATH="${TMP}/bin:${PATH}" \
