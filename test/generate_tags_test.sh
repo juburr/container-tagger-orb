@@ -1957,6 +1957,8 @@ run_remote_tag_cases() {
     fail_case "a signal during ls-remote fails the release" "exit 0"
   elif [[ -n "$(find "$sig_tmp" -name password -print -quit)" ]] || grep -rqF "ghs_testtoken_not_real" "$sig_tmp"; then
     fail_case "a signal during ls-remote removes the credential files" "$(find "$sig_tmp" -print)"
+  elif [[ -n "$(find "$sig_tmp" -mindepth 1 -print -quit)" ]]; then
+    fail_case "a signal during ls-remote removes every temporary file" "$(find "$sig_tmp" -print)"
   else
     pass_case
   fi
@@ -2511,8 +2513,221 @@ run_real_git_foreign_tags() {
     "$outfile" "${outfile}.log" "$status" $'1.0.0\n1.0\n1\nlatest'
 }
 
+# run_split OUT SCRIPT [env arguments...]: run a script with stdout and stderr
+# in OUT.stdout and OUT.stderr, and print its exit status. The arguments go to
+# env, so -u NAME runs the script with NAME unset, as CircleCI leaves
+# CIRCLE_TAG on a branch pipeline and CIRCLE_BRANCH on a tag pipeline. env
+# reads options only before the first NAME=VALUE, so every -u comes first.
+run_split() {
+  local out="$1"
+  local script="$2"
+  shift 2
+  local status=0
+  env "$@" \
+    LC_ALL=C \
+    PATH="${SPLIT_PATH:-${FAKE_BIN}:${ORIGINAL_PATH}}" \
+    bash "$script" > "${out}.stdout" 2> "${out}.stderr" || status=$?
+  printf '%s' "$status"
+}
+
+# expect_stderr_error NAME OUT LINE...: each LINE is a whole line of stderr,
+# and stdout has no ERROR: line and none of them.
+expect_stderr_error() {
+  local name="$1"
+  local out="$2"
+  shift 2
+  local line
+  for line in "$@"; do
+    if ! grep -Fxq -- "$line" "${out}.stderr"; then
+      fail_case "$name" "stderr is missing: ${line}" "stdout:" "$(cat "${out}.stdout")" "stderr:" "$(cat "${out}.stderr")"
+      return
+    fi
+    if grep -Fq -- "$line" "${out}.stdout"; then
+      fail_case "$name" "stdout has: ${line}" "$(cat "${out}.stdout")"
+      return
+    fi
+  done
+  if grep -q 'ERROR:' "${out}.stdout"; then
+    fail_case "$name" "stdout has an ERROR: line" "$(cat "${out}.stdout")"
+    return
+  fi
+  pass_case
+}
+
+run_shell_convention_cases() {
+  local out="${TMP}/conventions"
+  local tags_file="${TMP}/conventions-git-tags.txt"
+  local bash_env="${TMP}/conventions.env"
+  local status
+  : > "$tags_file"
+  local -a common=(
+    PARAM_TAGS_FILE="${out}.tags" PARAM_GIT_TAG_PREFIX="" PARAM_GIT_TAG=""
+    GIT_TAGS_FILE="$tags_file" PARAM_TAG_ENV_VAR="TAG" BASH_ENV="$bash_env"
+  )
+  # Variables from this test's own environment, such as a CI job's
+  # CIRCLE_BRANCH, must not reach these runs.
+  local -a no_remote=(-u GIT_REMOTES -u GIT_REMOTE_URL -u GIT_LS_REMOTE_TAGS_FILE -u GIT_COMMAND_LOG -u GIT_TAG_EXIT -u GIT_WORK_TREE)
+
+  # Errors go to stderr with an ERROR: prefix, continuation lines included.
+  status="$(run_split "$out" "$SCRIPT" "${no_remote[@]}" "${common[@]}" \
+    CIRCLE_TAG="nightly" CIRCLE_BRANCH="" CIRCLE_SHA1="$SHA" CIRCLE_BUILD_NUM="1")"
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "generate_tags error goes to stderr" "exit 0"
+  else
+    expect_stderr_error "generate_tags error goes to stderr" "$out" \
+      "ERROR: CIRCLE_TAG 'nightly' is not a supported release tag." \
+      "Refusing to publish a dev or edge tag for this tag."
+  fi
+
+  status="$(run_split "$out" "$SCRIPT" "${no_remote[@]}" "${common[@]}" GIT_TAG_EXIT=128 \
+    CIRCLE_TAG="v4.4.7" CIRCLE_BRANCH="" CIRCLE_SHA1="$SHA" CIRCLE_BUILD_NUM="1")"
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "generate_tags history refusal goes to stderr" "exit 0"
+  else
+    expect_stderr_error "generate_tags history refusal goes to stderr" "$out" \
+      "ERROR: git tag failed, so existing release tags cannot be compared." \
+      "fatal: detected dubious ownership in repository at '${PWD}'" \
+      "Refusing to publish latest, major, or minor tags from an incomplete history."
+  fi
+
+  : > "$bash_env"
+  status="$(run_split "$out" "${ROOT}/src/scripts/export_tag.sh" "${no_remote[@]}" "${common[@]}" \
+    CIRCLE_TAG="nightly" CIRCLE_BRANCH="" CIRCLE_SHA1="$SHA" CIRCLE_BUILD_NUM="1")"
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "export_tag error goes to stderr" "exit 0"
+  else
+    expect_stderr_error "export_tag error goes to stderr" "$out" \
+      "ERROR: CIRCLE_TAG 'nightly' is not a supported release tag." \
+      "Refusing to publish a dev or edge tag for this tag."
+  fi
+
+  # set -u: CircleCI leaves CIRCLE_TAG unset on branch pipelines and
+  # CIRCLE_BRANCH unset on tag pipelines. Both scripts treat unset as empty.
+  local -a cases=(
+    "branch pipeline|-u CIRCLE_TAG -u CIRCLE_BUILD_NUM CIRCLE_BRANCH=feature/x CIRCLE_SHA1=${SHA}|dev-${SHORT_SHA}|dev-${SHORT_SHA}"
+    "trunk pipeline|-u CIRCLE_TAG -u CIRCLE_BUILD_NUM CIRCLE_BRANCH=main CIRCLE_SHA1=${SHA}|edge"$'\n'"main-${SHORT_SHA}|main-${SHORT_SHA}"
+    "tag pipeline|-u CIRCLE_BRANCH -u CIRCLE_BUILD_NUM CIRCLE_TAG=v1.2.3 CIRCLE_SHA1=${SHA}|1.2.3"$'\n'"1.2"$'\n'"1"$'\n'"latest|1.2.3"
+    "no CircleCI variables|-u CIRCLE_TAG -u CIRCLE_BRANCH -u CIRCLE_SHA1 -u CIRCLE_BUILD_NUM|dev-|dev-"
+  )
+  local entry name vars expected_tags expected_env
+  local -a env_args
+  for entry in "${cases[@]}"; do
+    IFS='|' read -r -d '' name vars expected_tags expected_env < <(printf '%s\0' "$entry") || true
+    read -r -a env_args <<< "$vars"
+    status="$(run_split "$out" "$SCRIPT" "${no_remote[@]}" "${env_args[@]}" "${common[@]}")"
+    if [[ "$status" -ne 0 ]]; then
+      fail_case "generate_tags with unset CircleCI variables: ${name}" "exit ${status}" "$(cat "${out}.stderr")"
+    elif [[ "$(cat "${out}.tags")" != "$expected_tags" ]]; then
+      fail_case "generate_tags with unset CircleCI variables: ${name}" "expected:" "$expected_tags" "actual:" "$(cat "${out}.tags")"
+    elif [[ -s "${out}.stderr" ]]; then
+      fail_case "generate_tags with unset CircleCI variables: ${name}" "stderr:" "$(cat "${out}.stderr")"
+    else
+      pass_case
+    fi
+    : > "$bash_env"
+    status="$(run_split "$out" "${ROOT}/src/scripts/export_tag.sh" "${no_remote[@]}" "${env_args[@]}" "${common[@]}")"
+    if [[ "$status" -ne 0 ]]; then
+      fail_case "export_tag with unset CircleCI variables: ${name}" "exit ${status}" "$(cat "${out}.stderr")"
+    elif [[ "$(cat "$bash_env")" != "export TAG=${expected_env}" ]]; then
+      fail_case "export_tag with unset CircleCI variables: ${name}" "expected: export TAG=${expected_env}" "actual: $(cat "$bash_env")"
+    elif [[ -s "${out}.stderr" ]]; then
+      fail_case "export_tag with unset CircleCI variables: ${name}" "stderr:" "$(cat "${out}.stderr")"
+    else
+      pass_case
+    fi
+  done
+
+  # pipefail: sort | head -n 1 fails with SIGPIPE once sort has more output
+  # than a pipe holds (about 10,000 versions), which would stop the release.
+  local i
+  for ((i = 1; i <= 12000; i++)); do
+    printf 'v3.%s.0\n' "$i"
+  done > "$tags_file"
+  status="$(run_split "$out" "$SCRIPT" "${no_remote[@]}" "${common[@]}" \
+    CIRCLE_TAG="v3.12001.0" CIRCLE_BRANCH="" CIRCLE_SHA1="$SHA" CIRCLE_BUILD_NUM="1")"
+  if [[ "$status" -ne 0 ]]; then
+    fail_case "12000 release tags do not break the highest-version pipelines" "exit ${status}" "$(tail -n 5 "${out}.stderr")"
+  elif [[ "$(cat "${out}.tags")" != $'3.12001.0\n3.12001\n3\nlatest' ]]; then
+    fail_case "12000 release tags do not break the highest-version pipelines" "$(cat "${out}.tags")"
+  else
+    pass_case
+  fi
+  : > "$tags_file"
+
+  # A credential shield that could not be written in full is not used. The
+  # nested set -e this replaced was ignored under `if ! load_git_tags`, so a
+  # failed write before the final chmod went unnoticed. This cat fails only
+  # while it writes the helper script.
+  local fail_cat_dir="${TMP}/fail-cat"
+  local shield_tmp="${TMP}/shield-tmp"
+  local command_log="${TMP}/conventions-git.log"
+  local remote_file="${TMP}/conventions-remote-tags.txt"
+  local real_cat
+  real_cat="$(command -v cat)"
+  mkdir -p "$fail_cat_dir"
+  rm -rf "$shield_tmp"
+  mkdir -p "$shield_tmp"
+  cat > "${fail_cat_dir}/cat" << EOF
+#!/usr/bin/env bash
+if [[ "\$(readlink "/proc/\$\$/fd/1" 2>/dev/null)" == */helper ]]; then
+  echo "cat: write error: No space left on device" >&2
+  exit 1
+fi
+exec $(printf '%q' "$real_cat") "\$@"
+EOF
+  chmod +x "${fail_cat_dir}/cat"
+  printf 'v4.4.7\n' > "$tags_file"
+  printf 'v4.4.6\n' > "$remote_file"
+  : > "$command_log"
+  status="$(SPLIT_PATH="${fail_cat_dir}:${FAKE_BIN}:${ORIGINAL_PATH}" run_split "$out" "$SCRIPT" \
+    -u GIT_TAG_EXIT -u GIT_WORK_TREE "${common[@]}" \
+    GIT_REMOTES="origin" \
+    GIT_REMOTE_URL="https://x-access-token:ghs_testtoken_not_real@example.test/org/repo.git" \
+    GIT_LS_REMOTE_TAGS_FILE="$remote_file" \
+    GIT_COMMAND_LOG="$command_log" \
+    TMPDIR="$shield_tmp" \
+    CIRCLE_TAG="v4.4.7" CIRCLE_BRANCH="" CIRCLE_SHA1="$SHA" CIRCLE_BUILD_NUM="1")"
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "a partly written credential shield is not used" "exit 0" "$(cat "${out}.tags")"
+  elif grep -q 'ls-remote' "$command_log"; then
+    fail_case "a partly written credential shield is not used" "git ls-remote ran" "$(cat "$command_log")"
+  elif grep -Exq 'latest|[0-9]+|[0-9]+\.[0-9]+' "${out}.tags"; then
+    fail_case "a partly written credential shield is not used" "wrote a floating tag" "$(cat "${out}.tags")"
+  elif ! grep -Fxq "Refusing to publish latest, major, or minor tags from an incomplete history." "${out}.stderr"; then
+    fail_case "a partly written credential shield is not used" "missing refusal" "$(cat "${out}.stderr")"
+  elif [[ -n "$(find "$shield_tmp" -mindepth 1 -print -quit)" ]]; then
+    fail_case "a partly written credential shield is removed" "$(find "$shield_tmp" -print)"
+  else
+    pass_case
+  fi
+  rm -rf "$shield_tmp"
+
+  # A job can turn xtrace on for every step (SHELLOPTS, or set -x in
+  # BASH_ENV). generate_tags turns it off before it reads the remote URL.
+  printf 'v4.4.7\n' > "$tags_file"
+  : > "$command_log"
+  status="$(run_split "$out" "$SCRIPT" -u GIT_TAG_EXIT -u GIT_WORK_TREE "${common[@]}" \
+    SHELLOPTS=xtrace \
+    GIT_REMOTES="origin" \
+    GIT_REMOTE_URL="https://x-access-token:ghs_testtoken_not_real@example.test/org/repo.git" \
+    GIT_LS_REMOTE_TAGS_FILE="$remote_file" \
+    GIT_COMMAND_LOG="$command_log" \
+    CIRCLE_TAG="v4.4.7" CIRCLE_BRANCH="" CIRCLE_SHA1="$SHA" CIRCLE_BUILD_NUM="1")"
+  if [[ "$status" -ne 0 ]]; then
+    fail_case "xtrace from the job does not print the remote credentials" "exit ${status}" "$(tail -n 5 "${out}.stderr")"
+  elif grep -F "ghs_testtoken_not_real" "${out}.stdout" "${out}.stderr" >/dev/null; then
+    fail_case "xtrace from the job does not print the remote credentials" "token was visible"
+  elif [[ "$(cat "${out}.tags")" != $'4.4.7\n4.4\n4\nlatest' ]]; then
+    fail_case "xtrace from the job does not print the remote credentials" "$(cat "${out}.tags")"
+  else
+    pass_case
+  fi
+  : > "$tags_file"
+}
+
 main() {
   assert_sort_agrees_with_oracle
+  run_shell_convention_cases
   run_golden_cases
   run_branch_cases
   run_major_prefix_matrix

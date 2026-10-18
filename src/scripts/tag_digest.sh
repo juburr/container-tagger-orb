@@ -14,8 +14,7 @@
 # The expected-digest check is not atomic. Registries have no conditional tag
 # write, so another writer between the check and the write is not detected.
 
-set -e
-set +o history
+set -euo pipefail
 
 # ==========================================
 # Handle Input
@@ -52,7 +51,7 @@ trap 'rm -f "$err_file"' EXIT
 fail() {
     local line
     for line in "$@"; do
-        echo "Error: ${line}"
+        echo "ERROR: ${line}" >&2
     done
     exit 1
 }
@@ -109,7 +108,9 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
     if [[ ! "${line}" =~ $TAG_RE ]]; then
         fail "'${line}' in ${TAGS_FILE} is not a valid tag."
     fi
-    for existing in "${TAGS[@]}"; do
+    # TAGS is empty for the first tag. Bash before 4.4 (macOS has 3.2) treats an
+    # empty array as unset under set -u, so expand it only when it has elements.
+    for existing in ${TAGS[@]+"${TAGS[@]}"}; do
         if [[ "${existing}" == "${line}" ]]; then
             fail "'${line}' appears more than once in ${TAGS_FILE}."
         fi
@@ -140,7 +141,8 @@ if [[ -n "${EXPECTED_FILE}" ]]; then
         if [[ ! "${tag}" =~ $TAG_RE || -n "${extra}" ]] || { [[ "${value}" != "absent" ]] && [[ ! "${value}" =~ $DIGEST_RE ]]; }; then
             fail "'${line}' in ${EXPECTED_FILE} is not '<tag> <sha256:digest>' or '<tag> absent'."
         fi
-        for existing in "${EXPECTED_TAGS[@]}"; do
+        # Empty for the first line; see the TAGS loop above.
+        for existing in ${EXPECTED_TAGS[@]+"${EXPECTED_TAGS[@]}"}; do
             if [[ "${existing}" == "${tag}" ]]; then
                 fail "'${tag}' appears more than once in ${EXPECTED_FILE}."
             fi
@@ -199,7 +201,8 @@ current_digest() {
         printf '%s' "${out}"
         return 0
     fi
-    last="$(grep -v '^[[:space:]]*$' "$err_file" | tail -n 1)"
+    # grep finds nothing when crane printed nothing; that is not an error here.
+    last="$({ grep -v '^[[:space:]]*$' "$err_file" || true; } | tail -n 1)"
     case "${last}" in
         *MANIFEST_UNKNOWN*|*NAME_UNKNOWN*|*NOT_FOUND*|*"404 Not Found"*)
             printf 'absent'
@@ -211,8 +214,8 @@ current_digest() {
 
 echo "Checking the source image..."
 if ! SOURCE_CURRENT="$(current_digest "${IMAGE_DIGEST_REF}")"; then
-    echo "Error: could not read '${IMAGE_DIGEST_REF}' from the registry."
-    cat "$err_file"
+    echo "ERROR: could not read '${IMAGE_DIGEST_REF}' from the registry." >&2
+    cat "$err_file" >&2
     exit 1
 fi
 if [[ "${SOURCE_CURRENT}" == "absent" ]]; then
@@ -229,8 +232,8 @@ echo "Current digests, before writing (expected_digests_file format):"
 CURRENT_VALUES=()
 for tag in "${TAGS[@]}"; do
     if ! current="$(current_digest "${REPOSITORY}:${tag}")"; then
-        echo "Error: could not read the current digest of '${REPOSITORY}:${tag}'. No tag was written."
-        cat "$err_file"
+        echo "ERROR: could not read the current digest of '${REPOSITORY}:${tag}'. No tag was written." >&2
+        cat "$err_file" >&2
         exit 1
     fi
     CURRENT_VALUES+=("${current}")
@@ -267,12 +270,12 @@ for i in "${!TAGS[@]}"; do
     fi
     echo "  ${REPOSITORY}:${tag} -> ${DIGEST} (was ${CURRENT_VALUES[$i]})"
     if ! crane tag "${IMAGE_DIGEST_REF}" "${tag}" 2>"$err_file"; then
-        echo "Error: crane tag failed for '${REPOSITORY}:${tag}'."
-        cat "$err_file"
+        echo "ERROR: crane tag failed for '${REPOSITORY}:${tag}'." >&2
+        cat "$err_file" >&2
         if [[ "${#WRITTEN[@]}" -gt 0 ]]; then
-            echo "These tags were already written: ${WRITTEN[*]}. Their previous digests are logged above."
+            echo "These tags were already written: ${WRITTEN[*]}. Their previous digests are logged above." >&2
         else
-            echo "No tag was written."
+            echo "No tag was written." >&2
         fi
         exit 1
     fi

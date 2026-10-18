@@ -13,8 +13,7 @@
 # port stays part of the name:
 #   localhost:5000/org/app:1.2.3 -> localhost:5000/org/app
 
-set -e
-set +o history
+set -euo pipefail
 
 # Name without a tag or digest. "${ref%:*}" strips the last colon-suffix, which
 # is the tag once we know the last path component contains one.
@@ -72,15 +71,15 @@ echo "  IMAGE_REF_ENV_VAR: ${IMAGE_REF_ENV_VAR}"
 echo "  IMAGE_DIGEST_REF_ENV_VAR: ${IMAGE_DIGEST_REF_ENV_VAR}"
 
 if [[ ! "${IMAGE_REF_ENV_VAR}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-    echo "Error: image_ref_env_var '${IMAGE_REF_ENV_VAR}' is not a shell identifier."
+    echo "ERROR: image_ref_env_var '${IMAGE_REF_ENV_VAR}' is not a shell identifier." >&2
     exit 1
 fi
 if [[ ! "${IMAGE_DIGEST_REF_ENV_VAR}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-    echo "Error: image_digest_ref_env_var '${IMAGE_DIGEST_REF_ENV_VAR}' is not a shell identifier."
+    echo "ERROR: image_digest_ref_env_var '${IMAGE_DIGEST_REF_ENV_VAR}' is not a shell identifier." >&2
     exit 1
 fi
 if [[ -z "${BASH_ENV:-}" ]]; then
-    echo "Error: BASH_ENV is unset, so the digest cannot be passed to later steps."
+    echo "ERROR: BASH_ENV is unset, so the digest cannot be passed to later steps." >&2
     exit 1
 fi
 
@@ -89,12 +88,12 @@ IMAGE_REF="${!IMAGE_REF_ENV_VAR-}"
 echo "  IMAGE_REF: ${IMAGE_REF}"
 
 if [[ -z "${IMAGE_REF}" ]]; then
-    echo "Error: ${IMAGE_REF_ENV_VAR} is empty."
-    echo "Run export_image_ref before export_image_digest_ref."
+    echo "ERROR: ${IMAGE_REF_ENV_VAR} is empty." >&2
+    echo "Run export_image_ref before export_image_digest_ref." >&2
     exit 1
 fi
 if [[ "${IMAGE_REF}" == *[[:space:]]* ]]; then
-    echo "Error: ${IMAGE_REF_ENV_VAR} contains whitespace, so the registry digest cannot be read."
+    echo "ERROR: ${IMAGE_REF_ENV_VAR} contains whitespace, so the registry digest cannot be read." >&2
     exit 1
 fi
 
@@ -102,7 +101,7 @@ IMAGE="$(repository_name "${IMAGE_REF}")"
 IMAGE_LAST="${IMAGE##*/}"
 echo "  IMAGE: ${IMAGE}"
 if [[ -z "${IMAGE}" || -z "${IMAGE_LAST}" || "${IMAGE}" == *@* || "${IMAGE_LAST}" == *:* ]]; then
-    echo "Error: could not parse a repository name from '${IMAGE_REF}', so the registry digest cannot be read."
+    echo "ERROR: could not parse a repository name from '${IMAGE_REF}', so the registry digest cannot be read." >&2
     exit 1
 fi
 
@@ -114,8 +113,8 @@ if command -v crane >/dev/null 2>&1; then
     # A failing crane is fatal. Falling through to a local docker image would
     # publish a different digest and hide the registry failure.
     if ! DIGEST="$(crane digest "${IMAGE_REF}" 2>"$err_file")"; then
-        echo "Error: crane digest failed for '${IMAGE_REF}', so the registry digest cannot be read."
-        cat "$err_file"
+        echo "ERROR: crane digest failed for '${IMAGE_REF}', so the registry digest cannot be read." >&2
+        cat "$err_file" >&2
         exit 1
     fi
     if [[ -s "$err_file" ]]; then
@@ -129,13 +128,13 @@ elif command -v docker >/dev/null 2>&1; then
     elif image_is_missing "$(cat "$err_file")"; then
         echo "The image does not exist locally. Pulling ${IMAGE_REF}..."
         if ! docker pull "${IMAGE_REF}" 2>"$err_file"; then
-            echo "Error: docker pull failed for '${IMAGE_REF}', so the registry digest cannot be read."
-            cat "$err_file"
+            echo "ERROR: docker pull failed for '${IMAGE_REF}', so the registry digest cannot be read." >&2
+            cat "$err_file" >&2
             exit 1
         fi
     else
-        echo "Error: docker image inspect failed for '${IMAGE_REF}', so the registry digest cannot be read."
-        cat "$err_file"
+        echo "ERROR: docker image inspect failed for '${IMAGE_REF}', so the registry digest cannot be read." >&2
+        cat "$err_file" >&2
         exit 1
     fi
 
@@ -143,12 +142,12 @@ elif command -v docker >/dev/null 2>&1; then
     # digest, and attach it to the repository name we were asked for. An empty
     # list renders as an empty string instead of a template error.
     if ! DIGEST="$(docker inspect --format='{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "${IMAGE_REF}" 2>"$err_file")"; then
-        echo "Error: docker inspect failed for '${IMAGE_REF}', so the registry digest cannot be read."
-        cat "$err_file"
+        echo "ERROR: docker inspect failed for '${IMAGE_REF}', so the registry digest cannot be read." >&2
+        cat "$err_file" >&2
         exit 1
     fi
 else
-    echo "Error: neither crane nor docker is available, so the registry digest cannot be read."
+    echo "ERROR: neither crane nor docker is available, so the registry digest cannot be read." >&2
     exit 1
 fi
 
@@ -156,12 +155,12 @@ DIGEST="$(normalize_digest "${DIGEST}")"
 echo "  DIGEST=${DIGEST}"
 
 if [[ -z "${DIGEST}" || "${DIGEST}" == "<no value>" ]]; then
-    echo "Error: no registry digest was returned for '${IMAGE_REF}', so the registry digest cannot be read."
-    echo "crane reads the registry. docker can only use a RepoDigest already stored for a pulled or pushed image."
+    echo "ERROR: no registry digest was returned for '${IMAGE_REF}', so the registry digest cannot be read." >&2
+    echo "crane reads the registry. docker can only use a RepoDigest already stored for a pulled or pushed image." >&2
     exit 1
 fi
 if ! valid_digest "${DIGEST}"; then
-    echo "Error: digest '${DIGEST}' for '${IMAGE_REF}' is not a sha256, sha384, or sha512 digest, so the registry digest cannot be read."
+    echo "ERROR: digest '${DIGEST}' for '${IMAGE_REF}' is not a sha256, sha384, or sha512 digest, so the registry digest cannot be read." >&2
     exit 1
 fi
 
@@ -174,5 +173,8 @@ echo "Exporting value..."
 export "${IMAGE_DIGEST_REF_ENV_VAR}=${IMAGE_DIGEST_REF}"
 export_line="$(printf 'export %s=%q' "${IMAGE_DIGEST_REF_ENV_VAR}" "${IMAGE_DIGEST_REF}")"
 printf '%s\n' "${export_line}"
-printf '%s\n' "${export_line}" >> "${BASH_ENV}"
+if ! printf '%s\n' "${export_line}" >> "${BASH_ENV}"; then
+    echo "ERROR: could not write to BASH_ENV '${BASH_ENV}', so the digest cannot be passed to later steps." >&2
+    exit 1
+fi
 printf 'Done setting environment variable.\n'

@@ -155,7 +155,7 @@ check_tag_and_push() {
   status="$(run_in_work tag.sh \
     PARAM_TAGS_FILE='~' PARAM_SOURCE_IMAGE="local" \
     PARAM_TARGET_IMAGE="${REPO}" PARAM_TOOL="docker" PARAM_APPEND_TAGS_TO_SOURCE="0")"
-  if [[ "$status" -eq 0 ]] || ! grep -Fx "Unable to find tags file: ${FAKE_HOME}" "${TMP}/run.log" > /dev/null; then
+  if [[ "$status" -eq 0 ]] || ! grep -Fx "ERROR: Unable to find tags file: ${FAKE_HOME}" "${TMP}/run.log" > /dev/null; then
     fail_case "~ alone is expanded to \$HOME" "exit ${status}" "$(cat "${TMP}/run.log")"
   else
     pass_case
@@ -164,7 +164,7 @@ check_tag_and_push() {
   # ~user is not this user's home, so it is left alone.
   status="$(run_in_work push.sh \
     PARAM_TAGS_FILE='~nobody/tags.txt' PARAM_TARGET_IMAGE="${REPO}" PARAM_TOOL="docker")"
-  if [[ "$status" -eq 0 ]] || ! grep -Fx "Unable to find tags file: ~nobody/tags.txt" "${TMP}/run.log" > /dev/null; then
+  if [[ "$status" -eq 0 ]] || ! grep -Fx "ERROR: Unable to find tags file: ~nobody/tags.txt" "${TMP}/run.log" > /dev/null; then
     fail_case "~user is not expanded" "exit ${status}" "$(cat "${TMP}/run.log")"
   else
     pass_case

@@ -3,8 +3,7 @@
 # Export the most specific container tag to the job's environment through
 # BASH_ENV, so later steps in the same job can read it.
 
-set -e
-set +o history
+set -euo pipefail
 
 # ==========================================
 # Handle Input 
@@ -28,7 +27,8 @@ echo "  GIT_TAG: ${GIT_TAG}"
 echo "Computing value..."
 
 MOST_SPECIFIC_TAG=""
-SHORT_REVISION=${CIRCLE_SHA1:0:8}
+SHORT_REVISION="${CIRCLE_SHA1:-}"
+SHORT_REVISION="${SHORT_REVISION:0:8}"
 RELEASE_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$'
 RELEASE_TAG_HELP="Expected vMAJOR.MINOR.PATCH with an optional -alpha, -beta, or -rc suffix, for example v2.0.0, v2.0.0-rc1, v2.0.0-rc, or v2.0.0-rc.1."
 
@@ -38,20 +38,20 @@ RELEASE_TAG_HELP="Expected vMAJOR.MINOR.PATCH with an optional -alpha, -beta, or
 TAG=""
 if [[ -n "${GIT_TAG_PARAM}" ]]; then
     if [[ -z "${GIT_TAG}" ]]; then
-        echo "Error: git_tag '${GIT_TAG_PARAM}' expanded to an empty value."
-        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
+        echo "ERROR: git_tag '${GIT_TAG_PARAM}' expanded to an empty value." >&2
+        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags." >&2
         exit 1
     fi
-    if [[ -n "${CIRCLE_TAG}" && "${CIRCLE_TAG}" != "${GIT_TAG}" ]]; then
-        echo "Error: git_tag '${GIT_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'."
-        echo "Refusing to choose between two release identities."
+    if [[ -n "${CIRCLE_TAG:-}" && "${CIRCLE_TAG}" != "${GIT_TAG}" ]]; then
+        echo "ERROR: git_tag '${GIT_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'." >&2
+        echo "Refusing to choose between two release identities." >&2
         exit 1
     fi
     if [[ -n "${GIT_TAG_PREFIX}" ]]; then
         if [[ "${GIT_TAG}" != "${GIT_TAG_PREFIX}/"* ]]; then
-            echo "Error: git_tag '${GIT_TAG}' is not in the git_tag_prefix '${GIT_TAG_PREFIX}' namespace."
-            echo "With a git_tag_prefix, git_tag must be the full tag name, ${GIT_TAG_PREFIX}/vMAJOR.MINOR.PATCH."
-            echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
+            echo "ERROR: git_tag '${GIT_TAG}' is not in the git_tag_prefix '${GIT_TAG_PREFIX}' namespace." >&2
+            echo "With a git_tag_prefix, git_tag must be the full tag name, ${GIT_TAG_PREFIX}/vMAJOR.MINOR.PATCH." >&2
+            echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags." >&2
             exit 1
         fi
         TAG="${GIT_TAG#"${GIT_TAG_PREFIX}/"}"
@@ -59,28 +59,28 @@ if [[ -n "${GIT_TAG_PARAM}" ]]; then
         TAG="${GIT_TAG}"
     fi
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
-        echo "Error: git_tag '${GIT_TAG}' is not a supported release tag."
-        echo "${RELEASE_TAG_HELP}"
-        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
+        echo "ERROR: git_tag '${GIT_TAG}' is not a supported release tag." >&2
+        echo "${RELEASE_TAG_HELP}" >&2
+        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags." >&2
         exit 1
     fi
     echo "  Release identity: git_tag '${GIT_TAG}'. CIRCLE_TAG and CIRCLE_BRANCH are not used."
-elif [[ -n "${CIRCLE_TAG}" ]]; then
+elif [[ -n "${CIRCLE_TAG:-}" ]]; then
     TAG="${CIRCLE_TAG#"${GIT_TAG_PREFIX}/"}"
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
-        echo "Error: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag."
-        echo "${RELEASE_TAG_HELP}"
-        echo "Refusing to publish a dev or edge tag for this tag."
+        echo "ERROR: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag." >&2
+        echo "${RELEASE_TAG_HELP}" >&2
+        echo "Refusing to publish a dev or edge tag for this tag." >&2
         exit 1
     fi
     echo "  Release identity: CIRCLE_TAG '${CIRCLE_TAG}'."
 else
-    echo "  Release identity: none. CIRCLE_BRANCH '${CIRCLE_BRANCH}' selects the tag."
+    echo "  Release identity: none. CIRCLE_BRANCH '${CIRCLE_BRANCH:-}' selects the tag."
 fi
 
 if [[ -n "${TAG}" ]]; then
     MOST_SPECIFIC_TAG="${TAG#v}"
-elif [ "$CIRCLE_BRANCH" = develop ] || [ "$CIRCLE_BRANCH" = main ] || [ "$CIRCLE_BRANCH" = master ]; then
+elif [ "${CIRCLE_BRANCH:-}" = develop ] || [ "${CIRCLE_BRANCH:-}" = main ] || [ "${CIRCLE_BRANCH:-}" = master ]; then
     MOST_SPECIFIC_TAG="${CIRCLE_BRANCH}-${SHORT_REVISION}"
 else
     MOST_SPECIFIC_TAG="dev-${SHORT_REVISION}"
@@ -95,6 +95,10 @@ echo "Exporting value..."
 # Adds the most specific tag, shell-quoted so BASH_ENV can source any value.
 #   e.g., export TAG=3.5.3
 if [[ -n "${TAG_ENV_VAR}" ]]; then
+    if [[ -z "${BASH_ENV:-}" ]]; then
+        echo "ERROR: BASH_ENV is unset, so ${TAG_ENV_VAR} cannot be passed to later steps." >&2
+        exit 1
+    fi
     export "${TAG_ENV_VAR}"="${MOST_SPECIFIC_TAG}"
     printf 'export %s=%q\n' "${TAG_ENV_VAR}" "${MOST_SPECIFIC_TAG}" | tee -a "${BASH_ENV}"
 fi

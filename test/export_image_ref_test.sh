@@ -128,6 +128,45 @@ else
   pass_case
 fi
 
+# A tag variable that was never set fails the same way under set -u, with the
+# error on stderr and nothing on stdout that looks like one.
+printf 'export EXPORT_TEST_SENTINEL=1\n' > "$BASH_ENV_FILE"
+status=0
+(
+  cd "$TMP" || exit 1
+  env -u TAG BASH_ENV="$BASH_ENV_FILE" PARAM_IMAGE="ghcr.io/org/app" PARAM_TAG_ENV_VAR="TAG" \
+    PARAM_IMAGE_REF_ENV_VAR="IMAGE_REF" PATH="${FAKE_BIN}:${ORIGINAL_PATH}" \
+    "$BASH_BIN" "$SCRIPT" > "$LOG" 2> "${LOG}.stderr"
+) || status=$?
+if [[ "$status" -eq 0 ]]; then
+  fail_case "an unset tag variable fails" "exit 0" "$(cat "$LOG")"
+elif ! grep -Fx "ERROR: Expected the TAG environment variable to be set already." "${LOG}.stderr" > /dev/null ||
+  ! grep -Fx "Please run the export_tag command first." "${LOG}.stderr" > /dev/null; then
+  fail_case "an unset tag variable names export_tag on stderr" "stderr:" "$(cat "${LOG}.stderr")"
+elif grep -F "export_tag" "$LOG" > /dev/null || grep -F "ERROR:" "$LOG" > /dev/null; then
+  fail_case "an unset tag variable's error is not on stdout" "$(cat "$LOG")"
+elif [[ "$(cat "$BASH_ENV_FILE")" != "export EXPORT_TEST_SENTINEL=1" ]]; then
+  fail_case "an unset tag variable leaves BASH_ENV unchanged" "$(cat "$BASH_ENV_FILE")"
+else
+  pass_case
+fi
+
+# Without BASH_ENV there is nowhere to export to: fail and say so.
+status=0
+(
+  cd "$TMP" || exit 1
+  env -u BASH_ENV PARAM_IMAGE="ghcr.io/org/app" PARAM_TAG_ENV_VAR="TAG" TAG="1.2.3" \
+    PARAM_IMAGE_REF_ENV_VAR="IMAGE_REF" PATH="${FAKE_BIN}:${ORIGINAL_PATH}" \
+    "$BASH_BIN" "$SCRIPT" > "$LOG" 2> "${LOG}.stderr"
+) || status=$?
+if [[ "$status" -eq 0 ]]; then
+  fail_case "an unset BASH_ENV fails" "exit 0" "$(cat "$LOG")"
+elif ! grep -Fx "ERROR: BASH_ENV is unset, so IMAGE_REF cannot be passed to later steps." "${LOG}.stderr" > /dev/null; then
+  fail_case "an unset BASH_ENV says so on stderr" "stderr:" "$(cat "${LOG}.stderr")"
+else
+  pass_case
+fi
+
 printf 'passed=%s failed=%s\n' "$PASSED" "$FAILED"
 if [[ "$FAILED" -ne 0 ]]; then
   exit 1
