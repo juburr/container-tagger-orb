@@ -17,6 +17,9 @@ jobs:
       - run:
           name: Run circleci env subst tests
           command: bash test/env_subst_test.sh
+      - run:
+          name: Run shell conventions test
+          command: bash test/shell_conventions_test.sh
   test-tag-selection:
     docker:
       - image: cimg/base:current

@@ -242,3 +242,4 @@ Behavior changes:
 - The default exported variables are now `IMAGE_REF` and `IMAGE_DIGEST_REF`. Steps that read `${IMAGE_URI}` or `${IMAGE_URI_DIGEST}` must use the new names, or set `image_ref_env_var: IMAGE_URI` and `image_digest_ref_env_var: IMAGE_URI_DIGEST`.
 - A leading `~/` in `tags_file` and `expected_digests_file` now means `$HOME`. It used to be taken literally, as a path under a directory named `~` in the working directory.
 - `export_tag` and `export_image_ref` write shell-quoted values to `BASH_ENV`, as `export_image_digest_ref` already did.
+- Error messages start with `ERROR:` instead of `Error:` (or no prefix), and go to stderr. A step that searches a command's output for an error must read stderr too.

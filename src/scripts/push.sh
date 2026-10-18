@@ -1,7 +1,6 @@
 #!/bin/bash
 
-set -e
-set +o history
+set -euo pipefail
 
 # Read command arguments
 TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
@@ -24,15 +23,15 @@ echo "  TOOL: ${TOOL}"
 
 # Input Validation
 if [[ -z "${TAGS_FILE}" ]]; then
-    echo "A tags file must be specified."
+    echo "ERROR: A tags file must be specified." >&2
     exit 1
 fi
 if [[ ! -f "${TAGS_FILE}" ]]; then
-    echo "Unable to find tags file: ${TAGS_FILE}"
+    echo "ERROR: Unable to find tags file: ${TAGS_FILE}" >&2
     exit 1
 fi
 if [[ -z "${TARGET_IMAGE}" ]]; then
-    echo "A target image must be specified."
+    echo "ERROR: A target image must be specified." >&2
     exit 1
 fi
 

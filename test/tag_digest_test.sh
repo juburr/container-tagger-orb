@@ -156,11 +156,20 @@ run_tag_digest() {
   local expected="${2-}"
   local path_dir="${3:-$FAKE_BIN}"
   local status=0
-  PARAM_IMAGE_DIGEST_REF="$image_digest_ref" \
-    PARAM_TAGS_FILE="${TMP}/tags.txt" \
-    PARAM_EXPECTED_DIGESTS_FILE="$expected" \
-    PATH="${path_dir}:${ORIGINAL_PATH}" \
-    bash "$SCRIPT" > "${TMP}/run.log" 2>&1 || status=$?
+  # With STDERR_LOG set, stderr goes there and run.log holds stdout only.
+  if [[ -n "${STDERR_LOG:-}" ]]; then
+    PARAM_IMAGE_DIGEST_REF="$image_digest_ref" \
+      PARAM_TAGS_FILE="${TMP}/tags.txt" \
+      PARAM_EXPECTED_DIGESTS_FILE="$expected" \
+      PATH="${path_dir}:${ORIGINAL_PATH}" \
+      bash "$SCRIPT" > "${TMP}/run.log" 2> "$STDERR_LOG" || status=$?
+  else
+    PARAM_IMAGE_DIGEST_REF="$image_digest_ref" \
+      PARAM_TAGS_FILE="${TMP}/tags.txt" \
+      PARAM_EXPECTED_DIGESTS_FILE="$expected" \
+      PATH="${path_dir}:${ORIGINAL_PATH}" \
+      bash "$SCRIPT" > "${TMP}/run.log" 2>&1 || status=$?
+  fi
   printf '%s' "$status"
 }
 
@@ -411,7 +420,67 @@ run_registry_failure_cases() {
   fi
 }
 
+# A tags file with one tag, checked against one expected digest: each is read
+# while its array (TAGS, EXPECTED_TAGS) is still empty. Bash before 4.4 treats
+# an empty array as unset under set -u, so an unguarded "${TAGS[@]}" stops the
+# script there. macOS's bash 3.2 then exits 0 through the EXIT trap, so this
+# checks the registry and the summary line, not only the exit status.
+run_empty_array_cases() {
+  local status expected="${TMP}/expected.txt"
+  reset_registry
+  write_tags 1.2.3
+  printf '1.2.3 absent\n' > "$expected"
+  status="$(run_tag_digest "$SOURCE" "$expected")"
+  if [[ "$status" -ne 0 || "$(tag_value 1.2.3)" != "$DIGEST" ]] ||
+    ! grep -Fx "Done. 1 tag(s) on ${REPO} point at ${DIGEST}." "${TMP}/run.log" >/dev/null; then
+    fail_case "tags a single tag checked against a single expected digest" "exit ${status}" "$(cat "${TMP}/run.log")"
+  else
+    pass_case
+  fi
+}
+
+# Errors go to stderr with an ERROR: prefix on every line of a multi-line
+# error, with crane's own error output; the digest record stays on stdout.
+run_stream_cases() {
+  local status
+  STDERR_LOG="${TMP}/stderr.log"
+
+  reset_registry
+  write_tags 1.2.3
+  status="$(run_tag_digest "$SOURCE" "" "$NO_CRANE")"
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "a multi-line error goes to stderr" "exit 0"
+  elif ! grep -Fx "ERROR: crane was not found on PATH. tag_digest needs crane to tag an image in its registry." "$STDERR_LOG" >/dev/null ||
+    ! grep -Fx "ERROR: Install it before this step, from https://github.com/google/go-containerregistry/releases, and verify its checksum." "$STDERR_LOG" >/dev/null; then
+    fail_case "a multi-line error goes to stderr" "stderr:" "$(cat "$STDERR_LOG")"
+  elif grep -F "crane was not found" "${TMP}/run.log" >/dev/null; then
+    fail_case "a multi-line error is not on stdout" "$(cat "${TMP}/run.log")"
+  else
+    pass_case
+  fi
+
+  reset_registry "latest=${OLD}"
+  write_tags 1.2.3 latest 1
+  status="$(FAKE_TAG_ERROR_TAG=latest run_tag_digest "$SOURCE")"
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "a failed write goes to stderr" "exit 0"
+  elif ! grep -Fx "ERROR: crane tag failed for '${REPO}:latest'." "$STDERR_LOG" >/dev/null ||
+    ! grep -Fx "Error: PUT https://registry.example: DENIED: requested access to the resource is denied" "$STDERR_LOG" >/dev/null ||
+    ! grep -Fx "These tags were already written: 1.2.3. Their previous digests are logged above." "$STDERR_LOG" >/dev/null; then
+    fail_case "a failed write goes to stderr" "stderr:" "$(cat "$STDERR_LOG")"
+  elif grep -F "ERROR:" "${TMP}/run.log" >/dev/null || grep -F "already written" "${TMP}/run.log" >/dev/null; then
+    fail_case "a failed write is not on stdout" "$(cat "${TMP}/run.log")"
+  elif ! grep -Fx "  latest ${OLD}" "${TMP}/run.log" >/dev/null; then
+    fail_case "the digest record stays on stdout" "$(cat "${TMP}/run.log")"
+  else
+    pass_case
+  fi
+  unset STDERR_LOG
+}
+
 main() {
+  run_stream_cases
+  run_empty_array_cases
   run_input_cases
   run_happy_cases
   run_expected_cases

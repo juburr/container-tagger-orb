@@ -160,7 +160,12 @@ run_script() {
   export DOCKER_INSPECT_STDERR="${DOCKER_INSPECT_STDERR-}"
   export DOCKER_REPO_DIGEST="${DOCKER_REPO_DIGEST-}"
   local status=0
-  PATH="${path_prefix}:${ESSENTIALS}" "$BASH_BIN" "$SCRIPT" >"$LOG" 2>&1 || status=$?
+  # With STDERR_LOG set, stderr goes there and LOG holds stdout only.
+  if [[ -n "${STDERR_LOG:-}" ]]; then
+    PATH="${path_prefix}:${ESSENTIALS}" "$BASH_BIN" "$SCRIPT" >"$LOG" 2>"$STDERR_LOG" || status=$?
+  else
+    PATH="${path_prefix}:${ESSENTIALS}" "$BASH_BIN" "$SCRIPT" >"$LOG" 2>&1 || status=$?
+  fi
   printf '%s' "$status"
 }
 
@@ -198,7 +203,7 @@ expect_published() {
     fail_case "$name" "missing done line" "$(cat "$LOG")"
     return
   fi
-  if grep -E '^Error:' "$LOG" >/dev/null; then
+  if grep -E '^ERROR:' "$LOG" >/dev/null; then
     fail_case "$name" "success log contains an error" "$(cat "$LOG")"
     return
   fi
@@ -498,6 +503,8 @@ run_failure_cases() {
     fail_case "unwritable BASH_ENV" "did not reach the export" "$(cat "$LOG")"
   elif grep -F 'Done setting environment variable.' "$LOG" >/dev/null; then
     fail_case "unwritable BASH_ENV still finished" "$(cat "$LOG")"
+  elif ! grep -Fx "ERROR: could not write to BASH_ENV '${env_dir}', so the digest cannot be passed to later steps." "$LOG" >/dev/null; then
+    fail_case "unwritable BASH_ENV says what failed" "$(cat "$LOG")"
   elif [[ -n "$(ls -A "$env_dir")" ]]; then
     fail_case "unwritable BASH_ENV" "wrote into the directory" "$(ls -A "$env_dir")"
   elif ! assert_unchanged_env "unwritable BASH_ENV"; then
@@ -557,7 +564,50 @@ run_failure_cases() {
   expect_refused "docker short RepoDigest does not publish" "$DOCKER_ONLY" "$ref" "is not a sha256, sha384, or sha512 digest"
 }
 
+# Errors go to stderr with an ERROR: prefix, with the tool's own error output;
+# progress stays on stdout.
+run_stream_cases() {
+  local ref="localhost:5000/org/app:1.2.3"
+  local status
+  STDERR_LOG="${TMP}/stderr.log"
+
+  clear_tool_env
+  CRANE_EXIT=1
+  CRANE_STDERR="fatal: registry unreachable"
+  reset_outputs
+  status="$(run_script "$BOTH" "IMAGE_REF" "$ref" "IMAGE_DIGEST_REF")"
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "a crane failure goes to stderr" "exit 0"
+  elif ! grep -Fx "ERROR: crane digest failed for '${ref}', so the registry digest cannot be read." "$STDERR_LOG" >/dev/null ||
+    ! grep -Fx "fatal: registry unreachable" "$STDERR_LOG" >/dev/null; then
+    fail_case "a crane failure goes to stderr" "stderr:" "$(cat "$STDERR_LOG")"
+  elif grep -F "ERROR:" "$LOG" >/dev/null || grep -F "registry unreachable" "$LOG" >/dev/null; then
+    fail_case "a crane failure is not on stdout" "$(cat "$LOG")"
+  elif ! grep -Fx "  TOOL: crane" "$LOG" >/dev/null; then
+    fail_case "progress stays on stdout" "$(cat "$LOG")"
+  else
+    pass_case
+  fi
+
+  clear_tool_env
+  CRANE_STDOUT="sha256:${SHA256}"
+  reset_outputs
+  status="$(run_script "$BOTH" "IMAGE_REF" "" "IMAGE_DIGEST_REF")"
+  if [[ "$status" -eq 0 ]]; then
+    fail_case "a two-line error goes to stderr" "exit 0"
+  elif ! grep -Fx "ERROR: IMAGE_REF is empty." "$STDERR_LOG" >/dev/null ||
+    ! grep -Fx "Run export_image_ref before export_image_digest_ref." "$STDERR_LOG" >/dev/null; then
+    fail_case "a two-line error goes to stderr" "stderr:" "$(cat "$STDERR_LOG")"
+  elif grep -F "export_image_ref before" "$LOG" >/dev/null; then
+    fail_case "a two-line error is not on stdout" "$(cat "$LOG")"
+  else
+    pass_case
+  fi
+  unset STDERR_LOG
+}
+
 main() {
+  run_stream_cases
   run_reference_cases
   run_digest_shape_cases
   run_docker_cases

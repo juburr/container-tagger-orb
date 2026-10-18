@@ -1,7 +1,8 @@
 #!/bin/bash
 
-set -e
-set +o history
+set -euo pipefail
+# A job can turn xtrace on for every step (SHELLOPTS, or set -x in $BASH_ENV), and it would print the remote URL's credentials.
+set +o xtrace
 
 # Read command arguments
 TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
@@ -19,10 +20,10 @@ esac
 
 # Print arguments for debugging purposes
 echo "Input arguments for tag generation command:"
-echo "  CIRCLE_BRANCH: ${CIRCLE_BRANCH}"
-echo "  CIRCLE_BUILD_NUM: ${CIRCLE_BUILD_NUM}"
-echo "  CIRCLE_SHA1: ${CIRCLE_SHA1}"
-echo "  CIRCLE_TAG: ${CIRCLE_TAG}"
+echo "  CIRCLE_BRANCH: ${CIRCLE_BRANCH:-}"
+echo "  CIRCLE_BUILD_NUM: ${CIRCLE_BUILD_NUM:-}"
+echo "  CIRCLE_SHA1: ${CIRCLE_SHA1:-}"
+echo "  CIRCLE_TAG: ${CIRCLE_TAG:-}"
 echo "  TAGS_FILE: ${TAGS_FILE}"
 echo "  GIT_TAG_PREFIX: ${GIT_TAG_PREFIX}"
 echo "  GIT_TAG: ${GIT_TAG}"
@@ -47,20 +48,20 @@ TAG=""
 IDENTITY_SOURCE=""
 if [[ -n "${GIT_TAG_PARAM}" ]]; then
     if [[ -z "${GIT_TAG}" ]]; then
-        echo "Error: git_tag '${GIT_TAG_PARAM}' expanded to an empty value."
-        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
+        echo "ERROR: git_tag '${GIT_TAG_PARAM}' expanded to an empty value." >&2
+        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags." >&2
         exit 1
     fi
-    if [[ -n "${CIRCLE_TAG}" && "${CIRCLE_TAG}" != "${GIT_TAG}" ]]; then
-        echo "Error: git_tag '${GIT_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'."
-        echo "Refusing to choose between two release identities."
+    if [[ -n "${CIRCLE_TAG:-}" && "${CIRCLE_TAG}" != "${GIT_TAG}" ]]; then
+        echo "ERROR: git_tag '${GIT_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'." >&2
+        echo "Refusing to choose between two release identities." >&2
         exit 1
     fi
     if [[ -n "${GIT_TAG_PREFIX}" ]]; then
         if [[ "${GIT_TAG}" != "${GIT_TAG_PREFIX}/"* ]]; then
-            echo "Error: git_tag '${GIT_TAG}' is not in the git_tag_prefix '${GIT_TAG_PREFIX}' namespace."
-            echo "With a git_tag_prefix, git_tag must be the full tag name, ${GIT_TAG_PREFIX}/vMAJOR.MINOR.PATCH."
-            echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
+            echo "ERROR: git_tag '${GIT_TAG}' is not in the git_tag_prefix '${GIT_TAG_PREFIX}' namespace." >&2
+            echo "With a git_tag_prefix, git_tag must be the full tag name, ${GIT_TAG_PREFIX}/vMAJOR.MINOR.PATCH." >&2
+            echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags." >&2
             exit 1
         fi
         TAG="${GIT_TAG#"${GIT_TAG_PREFIX}/"}"
@@ -68,25 +69,25 @@ if [[ -n "${GIT_TAG_PARAM}" ]]; then
         TAG="${GIT_TAG}"
     fi
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
-        echo "Error: git_tag '${GIT_TAG}' is not a supported release tag."
-        echo "${RELEASE_TAG_HELP}"
-        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
+        echo "ERROR: git_tag '${GIT_TAG}' is not a supported release tag." >&2
+        echo "${RELEASE_TAG_HELP}" >&2
+        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags." >&2
         exit 1
     fi
     IDENTITY_SOURCE="git_tag"
     echo "Release identity: git_tag '${GIT_TAG}'. CIRCLE_TAG and CIRCLE_BRANCH are not used."
-elif [[ -n "${CIRCLE_TAG}" ]]; then
+elif [[ -n "${CIRCLE_TAG:-}" ]]; then
     TAG="${CIRCLE_TAG#"${GIT_TAG_PREFIX}/"}"
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
-        echo "Error: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag."
-        echo "${RELEASE_TAG_HELP}"
-        echo "Refusing to publish a dev or edge tag for this tag."
+        echo "ERROR: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag." >&2
+        echo "${RELEASE_TAG_HELP}" >&2
+        echo "Refusing to publish a dev or edge tag for this tag." >&2
         exit 1
     fi
     IDENTITY_SOURCE="CIRCLE_TAG"
     echo "Release identity: CIRCLE_TAG '${CIRCLE_TAG}'."
 else
-    echo "Release identity: none. CIRCLE_BRANCH '${CIRCLE_BRANCH}' selects edge or dev tags."
+    echo "Release identity: none. CIRCLE_BRANCH '${CIRCLE_BRANCH:-}' selects edge or dev tags."
 fi
 echo ""
 
@@ -156,9 +157,9 @@ print_redacted_file() {
 refuse_history() {
     local message="$1"
     local err_file="$2"
-    echo "Error: ${message}"
-    print_redacted_file "${err_file}"
-    echo "Refusing to publish latest, major, or minor tags from an incomplete history."
+    echo "ERROR: ${message}" >&2
+    print_redacted_file "${err_file}" >&2
+    echo "Refusing to publish latest, major, or minor tags from an incomplete history." >&2
     rm -f "${err_file}"
 }
 
@@ -360,9 +361,9 @@ write_auth_shield() {
     local dir="$1"
     local effective="$2"
     (
-        # The caller is `if ! load_git_tags`, which disables set -e for this
-        # whole call stack. Turn it back on so a partial shield is not used.
-        set -e
+        # The caller is `if ! load_git_tags`, and bash ignores set -e for every
+        # command in that call stack, even after a `set -e` in this subshell.
+        # Every write checks its own status, so a partial shield is not used.
         umask 077
         quoted_base=$(git_config_quote "${REMOTE_STRIPPED_URL}") || exit 1
         quoted_effective=$(git_config_quote "${effective}") || exit 1
@@ -371,21 +372,21 @@ write_auth_shield() {
             # username from this file instead of from the transport URL.
             if [[ "${REMOTE_HAS_PASSWORD}" -eq 0 ]]; then
                 quoted_user=$(git_config_quote "${REMOTE_USERNAME}") || exit 1
-                printf '[credential]\n'
-                printf '\tusername = "%s"\n' "${quoted_user}"
+                printf '[credential]\n' || exit 1
+                printf '\tusername = "%s"\n' "${quoted_user}" || exit 1
             fi
-            printf '[url "%s"]\n' "${quoted_base}"
-            printf '\tinsteadOf = "%s"\n' "${quoted_effective}"
-            printf '\tinsteadOf = "%s"\n' "${quoted_base}"
-        } > "${dir}/rewrite"
+            printf '[url "%s"]\n' "${quoted_base}" || exit 1
+            printf '\tinsteadOf = "%s"\n' "${quoted_effective}" || exit 1
+            printf '\tinsteadOf = "%s"\n' "${quoted_base}" || exit 1
+        } > "${dir}/rewrite" || exit 1
         # Without an embedded password this is a fallback after inherited
         # helpers. It answers with an empty password, which is what git itself
         # sends for https://TOKEN@host when no helper has one.
-        printf '%s' "${REMOTE_USERNAME}" > "${dir}/username"
-        printf '%s' "${REMOTE_PROTOCOL}" > "${dir}/protocol"
-        printf '%s' "${REMOTE_HOST}" > "${dir}/host"
-        printf '%s' "${REMOTE_PASSWORD}" > "${dir}/password"
-        cat > "${dir}/helper" << 'EOF'
+        printf '%s' "${REMOTE_USERNAME}" > "${dir}/username" || exit 1
+        printf '%s' "${REMOTE_PROTOCOL}" > "${dir}/protocol" || exit 1
+        printf '%s' "${REMOTE_HOST}" > "${dir}/host" || exit 1
+        printf '%s' "${REMOTE_PASSWORD}" > "${dir}/password" || exit 1
+        cat > "${dir}/helper" << 'EOF' || exit 1
 #!/bin/sh
 # Credential helper for one ls-remote. The secret values live in files.
 [ "${1:-}" = "get" ] || exit 0
@@ -407,7 +408,7 @@ fi
 printf '\n'
 exit 0
 EOF
-        chmod 700 "${dir}/helper"
+        chmod 700 "${dir}/helper" || exit 1
     )
 }
 
@@ -448,17 +449,26 @@ shielded_git() {
 # The shield directory holds the credentials while ls-remote runs. Remove it
 # on every exit, including INT and TERM from a cancelled step, so the token
 # is not left in $TMPDIR on a persistent executor. A trap set while a child
-# runs fires once that child exits.
+# runs fires once that child exits. The same cleanup removes the temporary
+# file that holds git's error output.
 SHIELD_DIR=""
+GIT_ERR_FILE=""
 remove_shield_dir() {
     if [[ -n "${SHIELD_DIR}" ]]; then
         rm -rf "${SHIELD_DIR}"
         SHIELD_DIR=""
     fi
 }
-trap remove_shield_dir EXIT
-trap 'remove_shield_dir; exit 130' INT
-trap 'remove_shield_dir; exit 143' TERM
+cleanup() {
+    remove_shield_dir
+    if [[ -n "${GIT_ERR_FILE}" ]]; then
+        rm -f "${GIT_ERR_FILE}"
+        GIT_ERR_FILE=""
+    fi
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 # Read tag names from the remote. On success, set remote_raw.
 fetch_remote_tag_text() {
@@ -472,16 +482,16 @@ fetch_remote_tag_text() {
         refuse_history "git remote get-url failed for '${tag_remote}', so existing release tags cannot be compared." "${err_file}"
         return 1
     fi
-    classify_remote_url "${remote_url}"
-    classify_status=$?
+    classify_status=0
+    classify_remote_url "${remote_url}" || classify_status=$?
     if [[ "${classify_status}" -eq 2 ]]; then
         refuse_history "the remote URL for '${tag_remote}' cannot be read without exposing embedded credentials, so existing release tags cannot be compared." "${err_file}"
         return 1
     fi
     if [[ "${classify_status}" -eq 0 ]]; then
         SHIELD_DIR=$(mktemp -d) || {
-            echo "Error: could not create a temporary directory, so existing release tags cannot be compared."
-            echo "Refusing to publish latest, major, or minor tags from an incomplete history."
+            echo "ERROR: could not create a temporary directory, so existing release tags cannot be compared." >&2
+            echo "Refusing to publish latest, major, or minor tags from an incomplete history." >&2
             return 1
         }
         shield_dir="${SHIELD_DIR}"
@@ -524,10 +534,11 @@ fetch_remote_tag_text() {
 load_git_tags() {
     local err_file work_tree remotes line remote_count only_remote saw_origin tag_remote remote_raw
     err_file=$(mktemp) || {
-        echo "Error: could not create a temporary file, so existing release tags cannot be compared."
-        echo "Refusing to publish latest, major, or minor tags from an incomplete history."
+        echo "ERROR: could not create a temporary file, so existing release tags cannot be compared." >&2
+        echo "Refusing to publish latest, major, or minor tags from an incomplete history." >&2
         return 1
     }
+    GIT_ERR_FILE="${err_file}"
     if ! work_tree=$(git rev-parse --is-inside-work-tree 2>"${err_file}"); then
         refuse_history "git cannot read this checkout, so existing release tags cannot be compared." "${err_file}"
         return 1
@@ -614,7 +625,7 @@ prefix_final_versions() {
 }
 
 echo "Generating tags:"
-SHORT_REVISION=$(echo "${CIRCLE_SHA1}" | cut -c 1-8)
+SHORT_REVISION=$(echo "${CIRCLE_SHA1:-}" | cut -c 1-8)
 echo "  SHORT_REVISION: ${SHORT_REVISION}"
 echo "  TAG: ${TAG}"
 
@@ -650,13 +661,17 @@ if [[ -n "${IDENTITY_SOURCE}" ]]; then
         fi
 
         RELEASED_VERSIONS=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | prefix_final_versions)
-        HIGHEST_VERSION=$(printf '%s\n' "${RELEASED_VERSIONS}" | sort -r --version-sort | head -n 1)
+        # sed -n 1p reads all of its input. head -n 1 exits after one line, and
+        # under pipefail a sort that is still writing (about 10,000 tags) would
+        # then fail the step with SIGPIPE.
+        HIGHEST_VERSION=$(printf '%s\n' "${RELEASED_VERSIONS}" | sort -r --version-sort | sed -n 1p)
         echo "  HIGHEST_VERSION: ${HIGHEST_VERSION}"
         # Match a whole numeric component. An unescaped "." matches any character,
-        # so "v1." also matched v11 and "v1.2." also matched v1.23.
-        HIGHEST_WITH_SAME_MAJOR=$(printf '%s\n' "${RELEASED_VERSIONS}" | grep -E "^v${MAJOR_VER}\.[0-9]+\.[0-9]+$" | sort -r --version-sort | head -n 1)
+        # so "v1." also matched v11 and "v1.2." also matched v1.23. grep finding
+        # no line is not an error.
+        HIGHEST_WITH_SAME_MAJOR=$(printf '%s\n' "${RELEASED_VERSIONS}" | { grep -E "^v${MAJOR_VER}\.[0-9]+\.[0-9]+$" || true; } | sort -r --version-sort | sed -n 1p)
         echo "  HIGHEST_WITH_SAME_MAJOR: ${HIGHEST_WITH_SAME_MAJOR}"
-        HIGHEST_WITH_SAME_MINOR=$(printf '%s\n' "${RELEASED_VERSIONS}" | grep -E "^v${MAJOR_VER}\.${MINOR_VER}\.[0-9]+$" | sort -r --version-sort | head -n 1)
+        HIGHEST_WITH_SAME_MINOR=$(printf '%s\n' "${RELEASED_VERSIONS}" | { grep -E "^v${MAJOR_VER}\.${MINOR_VER}\.[0-9]+$" || true; } | sort -r --version-sort | sed -n 1p)
         echo "  HIGHEST_WITH_SAME_MINOR: ${HIGHEST_WITH_SAME_MINOR}"
 
 
@@ -677,7 +692,7 @@ if [[ -n "${IDENTITY_SOURCE}" ]]; then
     else
         echo "  This is a pre-release. Not creating latest, major, or minor tags."
     fi
-elif [ "$CIRCLE_BRANCH" = develop ] || [ "$CIRCLE_BRANCH" = main ] || [ "$CIRCLE_BRANCH" = master ]; then
+elif [ "${CIRCLE_BRANCH:-}" = develop ] || [ "${CIRCLE_BRANCH:-}" = main ] || [ "${CIRCLE_BRANCH:-}" = master ]; then
     echo "  Processing as a merged pull request. The CIRCLE_BRANCH was set to a known trunk branch."
     echo "edge" >> "${TAGS_FILE}"
     echo "${CIRCLE_BRANCH}-${SHORT_REVISION}" >> "${TAGS_FILE}"
