@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Tag selection battery for src/scripts/generate_tags.sh and populate_tag.sh.
+# Tag selection battery for src/scripts/generate_tags.sh and export_tag.sh.
 #
 # Golden cases are the spec, including the reported floating-tag failures:
 #   v1.9.0 with v11.0.0 present must emit 1.9.0, 1.9, and 1
 #   v1.2.9 with v1.23.0 present must emit 1.2.9 and 1.2
 # An independent numeric oracle checks those goldens, then a generated matrix
-# and a large tag set compare the script to that oracle. The source_tag cases
+# and a large tag set compare the script to that oracle. The git_tag cases
 # check that an explicit release identity never falls back to CIRCLE_TAG,
 # CIRCLE_BRANCH, edge, or a sha tag.
 #
@@ -39,7 +39,7 @@ CIRCLECI_ONLY="${TMP}/circleci-only"
 mkdir -p "$FAKE_BIN" "$CIRCLECI_ONLY"
 
 # Like `circleci env subst`, expand ${NAME} references. An unset name expands
-# to nothing, which is how source_tag: ${RELEASE_TAG} looks when it is empty.
+# to nothing, which is how git_tag: ${RELEASE_TAG} looks when it is empty.
 cat > "${FAKE_BIN}/circleci" << 'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "env" && "${2:-}" == "subst" ]]; then
@@ -261,15 +261,15 @@ max_version() {
   printf '%s' "$best"
 }
 
-# A package owns exactly "<package>/<version>". No package owns names without
-# a slash. Everything else belongs to some other namespace.
+# A git_tag_prefix owns exactly "<prefix>/<version>". Without a prefix, only
+# names without a slash count. Everything else belongs to some other namespace.
 normalize_repo_tag() {
   local raw="$1"
-  local package="$2"
+  local prefix="$2"
   [[ -n "$raw" ]] || return 1
-  if [[ -n "$package" ]]; then
-    [[ "${raw:0:${#package}+1}" == "${package}/" ]] || return 1
-    raw="${raw:${#package}+1}"
+  if [[ -n "$prefix" ]]; then
+    [[ "${raw:0:${#prefix}+1}" == "${prefix}/" ]] || return 1
+    raw="${raw:${#prefix}+1}"
   else
     case "$raw" in
       */*) return 1 ;;
@@ -280,17 +280,17 @@ normalize_repo_tag() {
 
 local_tag_from_circle_tag() {
   local circle_tag="$1"
-  local package="$2"
-  printf '%s' "${circle_tag#"${package}/"}"
+  local prefix="$2"
+  printf '%s' "${circle_tag#"${prefix}/"}"
 }
 
 added_tag_for() {
   local circle_tag="$1"
-  local package="$2"
+  local prefix="$2"
   local tag
-  tag="$(local_tag_from_circle_tag "$circle_tag" "$package")"
-  if [[ -n "$package" ]]; then
-    printf '%s' "${package}/${tag}"
+  tag="$(local_tag_from_circle_tag "$circle_tag" "$prefix")"
+  if [[ -n "$prefix" ]]; then
+    printf '%s' "${prefix}/${tag}"
   else
     printf '%s' "$tag"
   fi
@@ -325,17 +325,17 @@ is_prerelease() {
 
 collect_finals() {
   local circle_tag="$1"
-  local package="$2"
+  local prefix="$2"
   shift 2
   local raw norm
   local -a inputs=()
   if [[ "$#" -gt 0 ]]; then
     inputs=("$@")
   fi
-  inputs+=("$(added_tag_for "$circle_tag" "$package")")
+  inputs+=("$(added_tag_for "$circle_tag" "$prefix")")
   local -a finals=()
   for raw in "${inputs[@]}"; do
-    if ! norm="$(normalize_repo_tag "$raw" "$package")"; then
+    if ! norm="$(normalize_repo_tag "$raw" "$prefix")"; then
       continue
     fi
     if is_final_semver "$norm"; then
@@ -350,11 +350,11 @@ collect_finals() {
 
 oracle_lines() {
   local circle_tag="$1"
-  local package="$2"
+  local prefix="$2"
   shift 2
   local tag major minor highest highest_major highest_minor
   local -a same_major=() same_minor=() finals=()
-  tag="$(local_tag_from_circle_tag "$circle_tag" "$package")"
+  tag="$(local_tag_from_circle_tag "$circle_tag" "$prefix")"
   major="$(printf '%s' "$tag" | cut -c 2- | cut -d . -f 1)"
   minor="$(printf '%s' "$tag" | cut -c 2- | cut -d . -f 2)"
 
@@ -365,7 +365,7 @@ oracle_lines() {
     return
   fi
 
-  mapfile -t finals < <(collect_finals "$circle_tag" "$package" "$@")
+  mapfile -t finals < <(collect_finals "$circle_tag" "$prefix" "$@")
   highest="$(max_version "${finals[@]}")"
   local candidate candidate_body candidate_major candidate_minor
   for candidate in "${finals[@]}"; do
@@ -412,12 +412,12 @@ assert_sort_agrees_with_oracle() {
 run_script() {
   local outfile="$1"
   local circle_tag="$2"
-  local package="$3"
+  local prefix="$3"
   local branch="$4"
   local sha="$5"
   local tags_file="$6"
   local path_prefix="$7"
-  local source_tag="${8-}"
+  local git_tag="${8-}"
   local log="${outfile}.log"
 
   export GIT_TAGS_FILE="$tags_file"
@@ -429,9 +429,9 @@ run_script() {
   export GIT_LS_REMOTE_STDERR="${GIT_LS_REMOTE_STDERR-}"
   export GIT_LS_REMOTE_TAGS_FILE="${GIT_LS_REMOTE_TAGS_FILE-}"
   export GIT_COMMAND_LOG="${GIT_COMMAND_LOG-}"
-  export PARAM_OUTFILE="$outfile"
-  export PARAM_PACKAGE="$package"
-  export PARAM_SOURCE_TAG="$source_tag"
+  export PARAM_TAGS_FILE="$outfile"
+  export PARAM_GIT_TAG_PREFIX="$prefix"
+  export PARAM_GIT_TAG="$git_tag"
   export CIRCLE_TAG="$circle_tag"
   export CIRCLE_BRANCH="$branch"
   export CIRCLE_SHA1="$sha"
@@ -466,7 +466,7 @@ check_output() {
 check_release() {
   local name="$1"
   local circle_tag="$2"
-  local package="$3"
+  local prefix="$3"
   local expected="$4"
   shift 4
   local tags_file="${TMP}/tags.txt"
@@ -476,14 +476,14 @@ check_release() {
     printf '%s\n' "$@" > "$tags_file"
   fi
   local status
-  status="$(run_script "$outfile" "$circle_tag" "$package" "" "$SHA" "$tags_file" "$FAKE_BIN")"
+  status="$(run_script "$outfile" "$circle_tag" "$prefix" "" "$SHA" "$tags_file" "$FAKE_BIN")"
   check_output "$name" "$outfile" "${outfile}.log" "$status" "$expected"
 }
 
 check_release_twice() {
   local name="$1"
   local circle_tag="$2"
-  local package="$3"
+  local prefix="$3"
   local expected="$4"
   shift 4
   local tags_file="${TMP}/tags.txt"
@@ -494,36 +494,36 @@ check_release_twice() {
     printf '%s\n' "$@" > "$tags_file"
   fi
   local status
-  status="$(run_script "$outfile" "$circle_tag" "$package" "" "$SHA" "$tags_file" "$FAKE_BIN")"
+  status="$(run_script "$outfile" "$circle_tag" "$prefix" "" "$SHA" "$tags_file" "$FAKE_BIN")"
   check_output "${name} (first run)" "$outfile" "${outfile}.log" "$status" "$expected"
   # A second run must truncate, not append.
-  status="$(run_script "$outfile" "$circle_tag" "$package" "" "$SHA" "$tags_file" "$FAKE_BIN")"
+  status="$(run_script "$outfile" "$circle_tag" "$prefix" "" "$SHA" "$tags_file" "$FAKE_BIN")"
   check_output "${name} (second run truncates)" "$outfile" "${outfile}.log" "$status" "$expected"
 }
 
 check_against_oracle() {
   local name="$1"
   local circle_tag="$2"
-  local package="$3"
+  local prefix="$3"
   shift 3
   local expected
-  expected="$(oracle_lines "$circle_tag" "$package" "$@")"
-  check_release "$name" "$circle_tag" "$package" "$expected" "$@"
+  expected="$(oracle_lines "$circle_tag" "$prefix" "$@")"
+  check_release "$name" "$circle_tag" "$prefix" "$expected" "$@"
 }
 
 golden() {
   local name="$1"
   local circle_tag="$2"
-  local package="$3"
+  local prefix="$3"
   local expected="$4"
   shift 4
   local oracle
-  oracle="$(oracle_lines "$circle_tag" "$package" "$@")"
+  oracle="$(oracle_lines "$circle_tag" "$prefix" "$@")"
   if [[ "$oracle" != "$expected" ]]; then
     printf 'ORACLE MISMATCH %s\n  handwritten:\n%s\n  oracle:\n%s\n' "$name" "$expected" "$oracle" >&2
     exit 1
   fi
-  check_release "$name" "$circle_tag" "$package" "$expected" "$@"
+  check_release "$name" "$circle_tag" "$prefix" "$expected" "$@"
 }
 
 check_branch() {
@@ -650,11 +650,11 @@ run_golden_cases() {
     "v2.0.1" "" $'2.0.1\n2.0\n2' \
     "v20.0.0" "v2.0.0"
 
-  golden "monorepo minor prefix stays inside the package" \
+  golden "monorepo minor prefix stays inside the git_tag_prefix namespace" \
     "services/auth/v1.2.9" "services/auth" $'1.2.9\n1.2' \
     "services/auth/v1.23.0" "services/auth/v1.2.8" "services/billing/v99.0.0" "v50.0.0"
 
-  golden "monorepo major prefix stays inside the package" \
+  golden "monorepo major prefix stays inside the git_tag_prefix namespace" \
     "services/auth/v1.9.0" "services/auth" $'1.9.0\n1.9\n1' \
     "services/auth/v11.0.0" "services/billing/v1.9.9" "other/v80.0.0"
 
@@ -710,7 +710,7 @@ run_golden_cases() {
     "v1.2.3" "" $'1.2.3\n1.2\n1\nlatest' \
     "v1.2.2"
 
-  check_release_twice "rerun truncates a custom outfile" \
+  check_release_twice "rerun truncates a custom tags_file" \
     "v1.0.0" "" $'1.0.0\n1.0\n1\nlatest'
 }
 
@@ -891,8 +891,8 @@ run_prerelease_matrix() {
   done
 }
 
-# Tags outside this package's namespace must never outrank the release. The
-# old filter built grep and sed patterns from the package, so an empty package
+# Tags outside this git_tag_prefix namespace must never outrank the release. The
+# old filter built grep and sed patterns from the prefix, so an empty prefix
 # stripped the first slash (zeta/v9.9.9 became zetav9.9.9) and an unanchored
 # match kept wip-v5.0.0. Both sort above v1.0.0, so v1.0.0 lost latest.
 run_foreign_namespace_cases() {
@@ -908,7 +908,7 @@ run_foreign_namespace_cases() {
     "v5.3.8" "" $'5.3.8\n5.3\n5\nlatest' \
     "opengee-v5.3.9" "v5.3.7"
 
-  golden "another package's tags do not count without a package" \
+  golden "another prefix's tags do not count without a git_tag_prefix" \
     "v1.0.0" "" $'1.0.0\n1.0\n1\nlatest' \
     "web/v9.0.0" "services/auth/v9.0.0" "x/y/v9.9.9"
 
@@ -916,7 +916,7 @@ run_foreign_namespace_cases() {
     "v1.0.0" "" $'1.0.0\n1.0\n1\nlatest' \
     "V9.0.0"
 
-  golden "sibling package web-legacy does not take latest from web" \
+  golden "sibling prefix web-legacy does not take latest from web" \
     "web/v1.0.0" "web" $'1.0.0\n1.0\n1\nlatest' \
     "web-legacy/v9.0.0" "web/v0.9.0"
 
@@ -924,11 +924,11 @@ run_foreign_namespace_cases() {
     "web/v1.0.0" "web" $'1.0.0\n1.0\n1\nlatest' \
     "web/x/v9.0.0"
 
-  golden "repository-level tags do not count for a package" \
+  golden "repository-level tags do not count for a git_tag_prefix" \
     "web/v1.0.0" "web" $'1.0.0\n1.0\n1\nlatest' \
     "v9.0.0" "zeta/v9.9.9" "other/web/v9.0.0"
 
-  golden "package name is literal, not a regex" \
+  golden "git_tag_prefix is literal, not a regex" \
     "a.b/v1.5.0" "a.b" $'1.5.0\n1.5\n1\nlatest' \
     "axb/v1.9.0" "axb/v9.0.0" "a.b/v1.4.0"
 
@@ -946,7 +946,7 @@ run_foreign_namespace_cases() {
 check_unsupported() {
   local name="$1"
   local circle_tag="$2"
-  local package="$3"
+  local prefix="$3"
   local branch="$4"
   local tags_file="${TMP}/tags.txt"
   local outfile="${TMP}/reject-out.txt"
@@ -954,7 +954,7 @@ check_unsupported() {
   rm -f "$outfile" "$log"
   printf 'v1.2.3\nv2.0.0\n' > "$tags_file"
   local status
-  status="$(run_script "$outfile" "$circle_tag" "$package" "$branch" "$SHA" "$tags_file" "$FAKE_BIN")"
+  status="$(run_script "$outfile" "$circle_tag" "$prefix" "$branch" "$SHA" "$tags_file" "$FAKE_BIN")"
   if [[ "$status" -eq 0 ]]; then
     local actual=""
     if [[ -f "$outfile" ]]; then
@@ -1029,14 +1029,14 @@ run_unsupported_tag_cases() {
     "$outfile" "${outfile}.log" "$status" "$expected"
 }
 
-check_populate() {
+check_export_tag() {
   local name="$1"
   local circle_tag="$2"
-  local package="$3"
+  local prefix="$3"
   local branch="$4"
   local expected_status="$5"
   local expected_value="$6"
-  local source_tag="${7-}"
+  local git_tag="${7-}"
   # Text the log must contain: the error for a rejection, or an optional line
   # such as the release identity for a success.
   local expected_log="${8-}"
@@ -1044,10 +1044,10 @@ check_populate() {
     expected_log="not a supported release tag"
   fi
   local bash_env="${TMP}/bash.env"
-  local log="${TMP}/populate.log"
+  local log="${TMP}/export-tag.log"
   rm -f "$bash_env" "$log"
-  export PARAM_PACKAGE="$package"
-  export PARAM_SOURCE_TAG="$source_tag"
+  export PARAM_GIT_TAG_PREFIX="$prefix"
+  export PARAM_GIT_TAG="$git_tag"
   export PARAM_TAG_ENV_VAR="TAG"
   export CIRCLE_TAG="$circle_tag"
   export CIRCLE_BRANCH="$branch"
@@ -1056,7 +1056,7 @@ check_populate() {
   export BASH_ENV="$bash_env"
   export LC_ALL=C
   local status=0
-  PATH="${FAKE_BIN}:${ORIGINAL_PATH}" bash "${ROOT}/src/scripts/populate_tag.sh" >"$log" 2>&1 || status=$?
+  PATH="${FAKE_BIN}:${ORIGINAL_PATH}" bash "${ROOT}/src/scripts/export_tag.sh" >"$log" 2>&1 || status=$?
   if [[ "$status" -ne "$expected_status" ]]; then
     fail_case "$name" "exit ${status}, expected ${expected_status}" "$(cat "$log")"
     return
@@ -1082,71 +1082,71 @@ check_populate() {
   pass_case
 }
 
-run_populate_tag_cases() {
-  check_populate "populate exact final" "v2.0.0" "" "" 0 "2.0.0"
-  check_populate "populate rc1" "v2.0.0-rc1" "" "" 0 "2.0.0-rc1"
-  check_populate "populate bare rc" "v2.0.0-rc" "" "" 0 "2.0.0-rc"
-  check_populate "populate dotted rc.1" "v2.0.0-rc.1" "" "main" 0 "2.0.0-rc.1"
-  check_populate "populate monorepo alpha.2" "services/auth/v2.0.0-alpha.2" "services/auth" "" 0 "2.0.0-alpha.2"
-  check_populate "populate trunk edge sha when there is no tag" "" "" "main" 0 "main-${SHORT_SHA}"
-  check_populate "populate dev sha when there is no tag" "" "" "feature/xyz" 0 "dev-${SHORT_SHA}"
-  check_populate "populate rejects v2.0.0-rc." "v2.0.0-rc." "" "" 1 ""
-  check_populate "populate rejects preview.1 on main" "v2.0.0-preview.1" "" "main" 1 ""
-  check_populate "populate rejects nightly" "nightly" "" "" 1 ""
-  check_populate "populate rejects a bad monorepo tag" "services/auth/v2.0.0-rc." "services/auth" "main" 1 ""
+run_export_tag_cases() {
+  check_export_tag "export_tag exact final" "v2.0.0" "" "" 0 "2.0.0"
+  check_export_tag "export_tag rc1" "v2.0.0-rc1" "" "" 0 "2.0.0-rc1"
+  check_export_tag "export_tag bare rc" "v2.0.0-rc" "" "" 0 "2.0.0-rc"
+  check_export_tag "export_tag dotted rc.1" "v2.0.0-rc.1" "" "main" 0 "2.0.0-rc.1"
+  check_export_tag "export_tag monorepo alpha.2" "services/auth/v2.0.0-alpha.2" "services/auth" "" 0 "2.0.0-alpha.2"
+  check_export_tag "export_tag trunk edge sha when there is no tag" "" "" "main" 0 "main-${SHORT_SHA}"
+  check_export_tag "export_tag dev sha when there is no tag" "" "" "feature/xyz" 0 "dev-${SHORT_SHA}"
+  check_export_tag "export_tag rejects v2.0.0-rc." "v2.0.0-rc." "" "" 1 ""
+  check_export_tag "export_tag rejects preview.1 on main" "v2.0.0-preview.1" "" "main" 1 ""
+  check_export_tag "export_tag rejects nightly" "nightly" "" "" 1 ""
+  check_export_tag "export_tag rejects a bad monorepo tag" "services/auth/v2.0.0-rc." "services/auth" "main" 1 ""
 }
 
-# Run generate_tags with source_tag. Extra arguments are the repository tags.
-run_with_source() {
+# Run generate_tags with git_tag. Extra arguments are the repository tags.
+run_with_git_tag() {
   local outfile="$1"
-  local source_tag="$2"
+  local git_tag="$2"
   local circle_tag="$3"
-  local package="$4"
+  local prefix="$4"
   local branch="$5"
   shift 5
-  local tags_file="${TMP}/source-tags.txt"
+  local tags_file="${TMP}/git-tag-tags.txt"
   : > "$tags_file"
   if [[ "$#" -gt 0 ]]; then
     printf '%s\n' "$@" > "$tags_file"
   fi
-  run_script "$outfile" "$circle_tag" "$package" "$branch" "$SHA" "$tags_file" "$FAKE_BIN" "$source_tag"
+  run_script "$outfile" "$circle_tag" "$prefix" "$branch" "$SHA" "$tags_file" "$FAKE_BIN" "$git_tag"
 }
 
-check_source_release() {
+check_git_tag_release() {
   local name="$1"
-  local source_tag="$2"
+  local git_tag="$2"
   local circle_tag="$3"
-  local package="$4"
+  local prefix="$4"
   local branch="$5"
   local expected="$6"
   shift 6
-  local outfile="${TMP}/source-out.txt"
+  local outfile="${TMP}/git-tag-out.txt"
   local status
-  status="$(run_with_source "$outfile" "$source_tag" "$circle_tag" "$package" "$branch" "$@")"
+  status="$(run_with_git_tag "$outfile" "$git_tag" "$circle_tag" "$prefix" "$branch" "$@")"
   check_output "$name" "$outfile" "${outfile}.log" "$status" "$expected"
-  if [[ "$status" -eq 0 ]] && ! grep -F "Release identity: source_tag '${source_tag}'." "${outfile}.log" >/dev/null; then
-    fail_case "${name} (identity log)" "missing source_tag identity line" "$(cat "${outfile}.log")"
+  if [[ "$status" -eq 0 ]] && ! grep -F "Release identity: git_tag '${git_tag}'." "${outfile}.log" >/dev/null; then
+    fail_case "${name} (identity log)" "missing git_tag identity line" "$(cat "${outfile}.log")"
   fi
 }
 
-check_source_rejected() {
+check_git_tag_rejected() {
   local name="$1"
-  local source_tag="$2"
+  local git_tag="$2"
   local circle_tag="$3"
-  local package="$4"
+  local prefix="$4"
   local branch="$5"
   local expected_error="$6"
-  local outfile="${TMP}/source-reject-out.txt"
+  local outfile="${TMP}/git-tag-reject-out.txt"
   local log="${outfile}.log"
   rm -f "$outfile" "$log"
   local status
-  status="$(run_with_source "$outfile" "$source_tag" "$circle_tag" "$package" "$branch" "v1.2.3" "v2.0.0")"
+  status="$(run_with_git_tag "$outfile" "$git_tag" "$circle_tag" "$prefix" "$branch" "v1.2.3" "v2.0.0")"
   if [[ "$status" -eq 0 ]]; then
     fail_case "$name" "expected a non-zero exit" "tags:" "$(cat "$outfile" 2>/dev/null || true)"
     return
   fi
   if [[ -s "$outfile" ]]; then
-    fail_case "$name" "wrote tags after rejecting source_tag" "$(cat "$outfile")"
+    fail_case "$name" "wrote tags after rejecting git_tag" "$(cat "$outfile")"
     return
   fi
   if ! grep -F -- "$expected_error" "$log" >/dev/null; then
@@ -1154,60 +1154,60 @@ check_source_rejected() {
     return
   fi
   if grep -E "Added tag to (output )?file: " "$log" >/dev/null; then
-    fail_case "$name" "added a tag after rejecting source_tag" "$(cat "$log")"
+    fail_case "$name" "added a tag after rejecting git_tag" "$(cat "$log")"
     return
   fi
   pass_case
 }
 
-run_source_tag_cases() {
+run_git_tag_cases() {
   local release_branch="release-execution/v1.2.3"
   local tag branch expected
 
   # Explicit final releases still read the repository's tag set.
-  check_source_release "source_tag final release on a release branch" \
+  check_git_tag_release "git_tag final release on a release branch" \
     "v1.2.3" "" "" "$release_branch" \
     "$(oracle_lines "v1.2.3" "" "v1.2.2" "v1.1.0")" \
     "v1.2.2" "v1.1.0"
-  check_source_release "source_tag backport does not take latest or the major tag" \
+  check_git_tag_release "git_tag backport does not take latest or the major tag" \
     "v4.4.7" "" "" "$release_branch" $'4.4.7\n4.4' \
     "v4.4.6" "v4.5.0" "v5.0.0"
-  check_source_release "source_tag first release publishes every floating tag" \
+  check_git_tag_release "git_tag first release publishes every floating tag" \
     "v0.8.0" "" "" "$release_branch" $'0.8.0\n0.8\n0\nlatest'
-  check_source_release "source_tag ignores foreign tags" \
+  check_git_tag_release "git_tag ignores foreign tags" \
     "v1.0.0" "" "" "$release_branch" $'1.0.0\n1.0\n1\nlatest' \
     "zeta/v9.9.9" "wip-v5.0.0" "opengee-v5.3.9"
 
   # Explicit pre-releases publish only the exact tag.
   for tag in v2.0.0-rc1 v2.0.0-rc v2.0.0-rc.1 v2.0.0-alpha.2 v2.0.0-beta4; do
-    check_source_release "source_tag prerelease ${tag} publishes only the exact tag" \
+    check_git_tag_release "git_tag prerelease ${tag} publishes only the exact tag" \
       "$tag" "" "" "$release_branch" "${tag#v}" \
       "v1.9.0" "v2.0.0" "v3.0.0"
   done
 
   # A trunk branch must not add edge or a branch sha tag.
   for branch in main master develop; do
-    check_source_release "source_tag final on ${branch} does not publish edge" \
+    check_git_tag_release "git_tag final on ${branch} does not publish edge" \
       "v1.2.3" "" "" "$branch" $'1.2.3\n1.2\n1\nlatest' \
       "v1.2.2"
-    check_source_release "source_tag prerelease on ${branch} does not publish edge" \
+    check_git_tag_release "git_tag prerelease on ${branch} does not publish edge" \
       "v1.2.3-rc1" "" "" "$branch" "1.2.3-rc1" \
       "v1.2.2"
   done
 
   # Agreeing with CIRCLE_TAG is fine; disagreeing is an error.
-  check_source_release "source_tag equal to CIRCLE_TAG" \
+  check_git_tag_release "git_tag equal to CIRCLE_TAG" \
     "v1.2.3" "v1.2.3" "" "" $'1.2.3\n1.2\n1\nlatest' \
     "v1.2.2"
-  check_source_rejected "source_tag that disagrees with CIRCLE_TAG" \
+  check_git_tag_rejected "git_tag that disagrees with CIRCLE_TAG" \
     "v1.2.3" "v1.2.4" "" "" \
-    "source_tag 'v1.2.3' does not match CIRCLE_TAG 'v1.2.4'."
-  check_source_rejected "source_tag that disagrees with an unsupported CIRCLE_TAG" \
+    "git_tag 'v1.2.3' does not match CIRCLE_TAG 'v1.2.4'."
+  check_git_tag_rejected "git_tag that disagrees with an unsupported CIRCLE_TAG" \
     "v1.2.3" "nightly" "" "main" \
-    "source_tag 'v1.2.3' does not match CIRCLE_TAG 'nightly'."
-  check_source_rejected "prerelease source_tag that disagrees with its final CIRCLE_TAG" \
+    "git_tag 'v1.2.3' does not match CIRCLE_TAG 'nightly'."
+  check_git_tag_rejected "prerelease git_tag that disagrees with its final CIRCLE_TAG" \
     "v1.2.3-rc1" "v1.2.3" "" "" \
-    "source_tag 'v1.2.3-rc1' does not match CIRCLE_TAG 'v1.2.3'."
+    "git_tag 'v1.2.3-rc1' does not match CIRCLE_TAG 'v1.2.3'."
 
   # Invalid syntax never falls back to CIRCLE_TAG, edge, or a sha tag.
   for tag in \
@@ -1230,104 +1230,104 @@ run_source_tag_cases() {
     "zeta/v2.0.0"
   do
     for branch in "" "main" "$release_branch"; do
-      check_source_rejected "source_tag '${tag}' is rejected on branch '${branch}'" \
+      check_git_tag_rejected "git_tag '${tag}' is rejected on branch '${branch}'" \
         "$tag" "" "" "$branch" \
-        "source_tag '${tag}' is not a supported release tag."
+        "git_tag '${tag}' is not a supported release tag."
     done
   done
 
-  # A source_tag that expands to nothing is an error, not "unset".
-  local outfile="${TMP}/source-out.txt"
+  # A git_tag that expands to nothing is an error, not "unset".
+  local outfile="${TMP}/git-tag-out.txt"
   local status
   rm -f "$outfile"
   # shellcheck disable=SC2016 # the reference is expanded by the fake circleci
-  status="$(unset RELEASE_TAG; run_with_source "$outfile" '${RELEASE_TAG}' "" "" "main" "v1.2.2")"
+  status="$(unset RELEASE_TAG; run_with_git_tag "$outfile" '${RELEASE_TAG}' "" "" "main" "v1.2.2")"
   if [[ "$status" -eq 0 ]]; then
-    fail_case "source_tag that expands to empty is rejected" "exit 0" "$(cat "$outfile")"
+    fail_case "git_tag that expands to empty is rejected" "exit 0" "$(cat "$outfile")"
   elif [[ -s "$outfile" ]]; then
-    fail_case "source_tag that expands to empty is rejected" "wrote tags" "$(cat "$outfile")"
-  elif ! grep -F "source_tag '\${RELEASE_TAG}' expanded to an empty value." "${outfile}.log" >/dev/null; then
-    fail_case "source_tag that expands to empty is rejected" "missing error" "$(cat "${outfile}.log")"
+    fail_case "git_tag that expands to empty is rejected" "wrote tags" "$(cat "$outfile")"
+  elif ! grep -F "git_tag '\${RELEASE_TAG}' expanded to an empty value." "${outfile}.log" >/dev/null; then
+    fail_case "git_tag that expands to empty is rejected" "missing error" "$(cat "${outfile}.log")"
   else
     pass_case
   fi
   # shellcheck disable=SC2016 # the reference is expanded by the fake circleci
-  status="$(export RELEASE_TAG="v1.2.3"; run_with_source "$outfile" '${RELEASE_TAG}' "" "" "main" "v1.2.2")"
-  check_output "source_tag reference to a set variable" \
+  status="$(export RELEASE_TAG="v1.2.3"; run_with_git_tag "$outfile" '${RELEASE_TAG}' "" "" "main" "v1.2.2")"
+  check_output "git_tag reference to a set variable" \
     "$outfile" "${outfile}.log" "$status" $'1.2.3\n1.2\n1\nlatest'
 
   # A final release still needs the tag history.
   local tags_file="${TMP}/tags.txt"
   printf 'v4.4.6\nv4.5.0\nv5.0.0\n' > "$tags_file"
-  outfile="${TMP}/source-history-out.txt"
+  outfile="${TMP}/git-tag-history-out.txt"
   export GIT_TAG_EXIT=128
   status="$(run_script "$outfile" "" "" "$release_branch" "$SHA" "$tags_file" "$FAKE_BIN" "v4.4.7")"
   if [[ "$status" -eq 0 ]]; then
-    fail_case "source_tag final release refuses an unreadable history" "exit 0" "$(cat "$outfile")"
+    fail_case "git_tag final release refuses an unreadable history" "exit 0" "$(cat "$outfile")"
   elif grep -qx 'latest' "$outfile" 2>/dev/null; then
-    fail_case "source_tag final release refuses an unreadable history" "wrote latest" "$(cat "$outfile")"
+    fail_case "git_tag final release refuses an unreadable history" "wrote latest" "$(cat "$outfile")"
   elif ! grep -F "Refusing to publish latest" "${outfile}.log" >/dev/null; then
-    fail_case "source_tag final release refuses an unreadable history" "missing refusal" "$(cat "${outfile}.log")"
+    fail_case "git_tag final release refuses an unreadable history" "missing refusal" "$(cat "${outfile}.log")"
   else
     pass_case
   fi
   status="$(run_script "$outfile" "" "" "$release_branch" "$SHA" "$tags_file" "$FAKE_BIN" "v4.4.7-rc1")"
   unset GIT_TAG_EXIT
-  check_output "source_tag prerelease does not need tag history" \
+  check_output "git_tag prerelease does not need tag history" \
     "$outfile" "${outfile}.log" "$status" "4.4.7-rc1"
 
-  # With a package, source_tag is the full <package>/vX.Y.Z tag name.
-  check_source_release "monorepo source_tag uses the package's tag set" \
+  # With a git_tag_prefix, git_tag is the full <prefix>/vX.Y.Z tag name.
+  check_git_tag_release "monorepo git_tag uses the prefix's tag set" \
     "services/auth/v1.2.9" "" "services/auth" "$release_branch" $'1.2.9\n1.2' \
     "services/auth/v1.23.0" "services/auth/v1.2.8" "services/billing/v99.0.0" "v50.0.0"
-  check_source_release "monorepo source_tag prerelease" \
+  check_git_tag_release "monorepo git_tag prerelease" \
     "services/auth/v2.0.0-rc.1" "" "services/auth" "main" "2.0.0-rc.1" \
     "services/auth/v2.0.0"
-  check_source_release "monorepo source_tag equal to CIRCLE_TAG" \
+  check_git_tag_release "monorepo git_tag equal to CIRCLE_TAG" \
     "services/auth/v1.0.0" "services/auth/v1.0.0" "services/auth" "" $'1.0.0\n1.0\n1\nlatest'
-  check_source_rejected "monorepo source_tag without the package prefix" \
+  check_git_tag_rejected "monorepo git_tag without the git_tag_prefix" \
     "v1.2.3" "" "services/auth" "main" \
-    "source_tag 'v1.2.3' is not a tag of package 'services/auth'."
-  check_source_rejected "monorepo source_tag with another package's prefix" \
+    "git_tag 'v1.2.3' is not in the git_tag_prefix 'services/auth' namespace."
+  check_git_tag_rejected "monorepo git_tag with another prefix" \
     "services/billing/v1.2.3" "" "services/auth" "" \
-    "source_tag 'services/billing/v1.2.3' is not a tag of package 'services/auth'."
-  check_source_rejected "monorepo source_tag with a sibling package's prefix" \
+    "git_tag 'services/billing/v1.2.3' is not in the git_tag_prefix 'services/auth' namespace."
+  check_git_tag_rejected "monorepo git_tag with a sibling prefix" \
     "services/auth-legacy/v1.2.3" "" "services/auth" "" \
-    "source_tag 'services/auth-legacy/v1.2.3' is not a tag of package 'services/auth'."
-  check_source_rejected "monorepo source_tag that is only the prefix" \
+    "git_tag 'services/auth-legacy/v1.2.3' is not in the git_tag_prefix 'services/auth' namespace."
+  check_git_tag_rejected "monorepo git_tag that is only the prefix" \
     "services/auth/" "" "services/auth" "main" \
-    "source_tag 'services/auth/' is not a supported release tag."
-  check_source_rejected "monorepo source_tag with a nested namespace" \
+    "git_tag 'services/auth/' is not a supported release tag."
+  check_git_tag_rejected "monorepo git_tag with a nested namespace" \
     "services/auth/beta/v1.2.3" "" "services/auth" "" \
-    "source_tag 'services/auth/beta/v1.2.3' is not a supported release tag."
-  check_source_rejected "monorepo source_tag that disagrees with a bare CIRCLE_TAG" \
+    "git_tag 'services/auth/beta/v1.2.3' is not a supported release tag."
+  check_git_tag_rejected "monorepo git_tag that disagrees with a bare CIRCLE_TAG" \
     "services/auth/v1.2.3" "v1.2.3" "services/auth" "" \
-    "source_tag 'services/auth/v1.2.3' does not match CIRCLE_TAG 'v1.2.3'."
-  check_source_rejected "package source_tag without a package parameter" \
+    "git_tag 'services/auth/v1.2.3' does not match CIRCLE_TAG 'v1.2.3'."
+  check_git_tag_rejected "prefixed git_tag without a git_tag_prefix parameter" \
     "services/auth/v1.2.3" "" "" "main" \
-    "source_tag 'services/auth/v1.2.3' is not a supported release tag."
+    "git_tag 'services/auth/v1.2.3' is not a supported release tag."
 
-  # Unset source_tag keeps the legacy behaviour, and says which identity it used.
+  # Unset git_tag keeps the legacy behaviour, and says which identity it used.
   outfile="${TMP}/legacy-out.txt"
   printf 'v1.2.2\n' > "$tags_file"
   status="$(run_script "$outfile" "v1.2.3" "" "main" "$SHA" "$tags_file" "$FAKE_BIN" "")"
-  check_output "unset source_tag uses CIRCLE_TAG" \
+  check_output "unset git_tag uses CIRCLE_TAG" \
     "$outfile" "${outfile}.log" "$status" $'1.2.3\n1.2\n1\nlatest'
   if ! grep -F "Release identity: CIRCLE_TAG 'v1.2.3'." "${outfile}.log" >/dev/null; then
-    fail_case "unset source_tag logs the CIRCLE_TAG identity" "$(cat "${outfile}.log")"
+    fail_case "unset git_tag logs the CIRCLE_TAG identity" "$(cat "${outfile}.log")"
   else
     pass_case
   fi
   status="$(run_script "$outfile" "" "" "main" "$SHA" "$tags_file" "$FAKE_BIN" "")"
-  check_output "unset source_tag on main still publishes edge" \
+  check_output "unset git_tag on main still publishes edge" \
     "$outfile" "${outfile}.log" "$status" $'edge\n'"main-${SHORT_SHA}"
   if ! grep -F "Release identity: none. CIRCLE_BRANCH 'main' selects edge or dev tags." "${outfile}.log" >/dev/null; then
-    fail_case "unset source_tag logs the branch identity" "$(cat "${outfile}.log")"
+    fail_case "unset git_tag logs the branch identity" "$(cat "${outfile}.log")"
   else
     pass_case
   fi
   status="$(run_script "$outfile" "" "" "$release_branch" "$SHA" "$tags_file" "$FAKE_BIN" "")"
-  check_output "unset source_tag on a release branch is a dev build" \
+  check_output "unset git_tag on a release branch is a dev build" \
     "$outfile" "${outfile}.log" "$status" "dev-${SHORT_SHA}"
 
   # A consumer that only creates tags matching this grammar is always accepted:
@@ -1347,39 +1347,39 @@ run_source_tag_cases() {
     else
       expected="$(oracle_lines "$tag" "")"
     fi
-    check_source_release "consumer grammar ${tag} is accepted as source_tag" \
+    check_git_tag_release "consumer grammar ${tag} is accepted as git_tag" \
       "$tag" "" "" "$release_branch" "$expected"
   done
 }
 
-run_populate_source_tag_cases() {
+run_export_tag_git_tag_cases() {
   local release_branch="release-execution/v1.2.3"
-  check_populate "populate source_tag final on a release branch" \
-    "" "" "$release_branch" 0 "1.2.3" "v1.2.3" "Release identity: source_tag 'v1.2.3'."
-  check_populate "populate source_tag prerelease" \
+  check_export_tag "export_tag git_tag final on a release branch" \
+    "" "" "$release_branch" 0 "1.2.3" "v1.2.3" "Release identity: git_tag 'v1.2.3'."
+  check_export_tag "export_tag git_tag prerelease" \
     "" "" "$release_branch" 0 "2.0.0-rc1" "v2.0.0-rc1"
-  check_populate "populate source_tag dotted prerelease on main" \
+  check_export_tag "export_tag git_tag dotted prerelease on main" \
     "" "" "main" 0 "2.0.0-rc.1" "v2.0.0-rc.1"
-  check_populate "populate source_tag on main is not a trunk sha" \
+  check_export_tag "export_tag git_tag on main is not a trunk sha" \
     "" "" "main" 0 "1.2.3" "v1.2.3"
-  check_populate "populate source_tag equal to CIRCLE_TAG" \
+  check_export_tag "export_tag git_tag equal to CIRCLE_TAG" \
     "v1.2.3" "" "" 0 "1.2.3" "v1.2.3"
-  check_populate "populate source_tag that disagrees with CIRCLE_TAG" \
-    "v1.2.4" "" "" 1 "" "v1.2.3" "source_tag 'v1.2.3' does not match CIRCLE_TAG 'v1.2.4'."
-  check_populate "populate source_tag with invalid syntax" \
-    "" "" "main" 1 "" "v1.2.3-rc." "source_tag 'v1.2.3-rc.' is not a supported release tag."
-  check_populate "populate source_tag that is not a version" \
-    "" "" "$release_branch" 1 "" "nightly" "source_tag 'nightly' is not a supported release tag."
-  check_populate "populate monorepo source_tag" \
+  check_export_tag "export_tag git_tag that disagrees with CIRCLE_TAG" \
+    "v1.2.4" "" "" 1 "" "v1.2.3" "git_tag 'v1.2.3' does not match CIRCLE_TAG 'v1.2.4'."
+  check_export_tag "export_tag git_tag with invalid syntax" \
+    "" "" "main" 1 "" "v1.2.3-rc." "git_tag 'v1.2.3-rc.' is not a supported release tag."
+  check_export_tag "export_tag git_tag that is not a version" \
+    "" "" "$release_branch" 1 "" "nightly" "git_tag 'nightly' is not a supported release tag."
+  check_export_tag "export_tag monorepo git_tag" \
     "" "services/auth" "main" 0 "2.0.0-alpha.2" "services/auth/v2.0.0-alpha.2"
-  check_populate "populate monorepo source_tag without the prefix" \
-    "" "services/auth" "main" 1 "" "v2.0.0" "source_tag 'v2.0.0' is not a tag of package 'services/auth'."
+  check_export_tag "export_tag monorepo git_tag without the git_tag_prefix" \
+    "" "services/auth" "main" 1 "" "v2.0.0" "git_tag 'v2.0.0' is not in the git_tag_prefix 'services/auth' namespace."
   # shellcheck disable=SC2016 # the reference is expanded by the fake circleci
-  check_populate "populate source_tag that expands to empty" \
+  check_export_tag "export_tag git_tag that expands to empty" \
     "" "" "main" 1 "" '${RELEASE_TAG_THAT_IS_NOT_SET}' "expanded to an empty value."
-  check_populate "populate unset source_tag keeps the trunk sha" \
+  check_export_tag "export_tag unset git_tag keeps the trunk sha" \
     "" "" "main" 0 "main-${SHORT_SHA}" "" "Release identity: none."
-  check_populate "populate unset source_tag keeps CIRCLE_TAG" \
+  check_export_tag "export_tag unset git_tag keeps CIRCLE_TAG" \
     "v2.0.0" "" "" 0 "2.0.0" "" "Release identity: CIRCLE_TAG 'v2.0.0'."
 }
 
@@ -1477,13 +1477,13 @@ run_real_git_script() {
   local outfile="$2"
   local circle_tag="$3"
   local branch="$4"
-  local source_tag="${5-}"
+  local git_tag="${5-}"
   (
     cd "$dir" || exit 1
     env \
-      PARAM_OUTFILE="$outfile" \
-      PARAM_PACKAGE="" \
-      PARAM_SOURCE_TAG="$source_tag" \
+      PARAM_TAGS_FILE="$outfile" \
+      PARAM_GIT_TAG_PREFIX="" \
+      PARAM_GIT_TAG="$git_tag" \
       CIRCLE_TAG="$circle_tag" \
       CIRCLE_BRANCH="$branch" \
       CIRCLE_SHA1="$SHA" \
@@ -1659,7 +1659,7 @@ run_remote_tag_cases() {
   GIT_REMOTES="origin"
   GIT_LS_REMOTE_TAGS_FILE="$remote_file"
   status="$(run_script "$outfile" "services/auth/v1.2.9" "services/auth" "" "$SHA" "$local_file" "$FAKE_BIN")"
-  check_output "remote monorepo tags keep the package prefix" \
+  check_output "remote monorepo tags keep the git_tag_prefix" \
     "$outfile" "${outfile}.log" "$status" $'1.2.9\n1.2'
   clear_remote_env
 
@@ -1668,7 +1668,7 @@ run_remote_tag_cases() {
   GIT_REMOTES="origin"
   GIT_LS_REMOTE_TAGS_FILE="$remote_file"
   status="$(run_script "$outfile" "services/auth/v1.2.9" "services/auth" "" "$SHA" "$local_file" "$FAKE_BIN")"
-  check_output "an unprefixed remote tag does not affect a package release" \
+  check_output "an unprefixed remote tag does not affect a prefixed release" \
     "$outfile" "${outfile}.log" "$status" $'1.2.9\n1.2\n1\nlatest'
   clear_remote_env
 
@@ -1934,9 +1934,9 @@ run_remote_tag_cases() {
     GIT_LS_REMOTE_STARTED="$started" \
     GIT_LS_REMOTE_SLEEP=2 \
     TMPDIR="$sig_tmp" \
-    PARAM_OUTFILE="$outfile" \
-    PARAM_PACKAGE="" \
-    PARAM_SOURCE_TAG="" \
+    PARAM_TAGS_FILE="$outfile" \
+    PARAM_GIT_TAG_PREFIX="" \
+    PARAM_GIT_TAG="" \
     CIRCLE_TAG="v4.4.7" \
     CIRCLE_BRANCH="" \
     CIRCLE_SHA1="$SHA" \
@@ -2427,8 +2427,8 @@ run_credential_git() {
   (
     cd "$dir" || exit 1
     env \
-      PARAM_OUTFILE="$outfile" \
-      PARAM_PACKAGE="" \
+      PARAM_TAGS_FILE="$outfile" \
+      PARAM_GIT_TAG_PREFIX="" \
       CIRCLE_TAG="$circle_tag" \
       CIRCLE_BRANCH="" \
       CIRCLE_SHA1="$SHA" \
@@ -2524,9 +2524,9 @@ main() {
   run_prerelease_matrix
   run_foreign_namespace_cases
   run_unsupported_tag_cases
-  run_populate_tag_cases
-  run_source_tag_cases
-  run_populate_source_tag_cases
+  run_export_tag_cases
+  run_git_tag_cases
+  run_export_tag_git_tag_cases
   run_unreadable_history_cases
   run_remote_tag_cases
   run_stress_set

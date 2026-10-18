@@ -9,22 +9,24 @@ parameters:
     type: string
     default: ""
     description: >
-      Optional file with one "<tag> <sha256:digest>" or "<tag> absent" line for every tag in tags_file.
+      Optional path of a file with one "<tag> <sha256:digest>" or "<tag> absent" line for every tag in tags_file.
       If any tag currently points elsewhere, no tag is written. The check runs just before writing and is not atomic.
-  image_digest:
+      A leading ~/ is expanded to $HOME.
+  image_digest_ref:
     type: string
     description: >
-      Repository and digest of the image to tag, for example ghcr.io/org/app@sha256:<64 hex characters> or ${IMAGE_URI_DIGEST}.
+      Image digest reference of the image to tag, REPOSITORY@sha256:<64 hex characters>, for example
+      ghcr.io/org/app@sha256:... or ${IMAGE_DIGEST_REF} from export_image_digest_ref. A tag is not accepted.
       The tags are written to this repository.
   tags_file:
     type: string
     default: tags.txt
-    description: "The file containing the list of tags to apply, one per line."
+    description: "Path of the file with the tags to apply, one per line, as written by generate_tags. A leading ~/ is expanded to $HOME."
 steps:
   - run:
       environment:
         PARAM_EXPECTED_DIGESTS_FILE: << parameters.expected_digests_file >>
-        PARAM_IMAGE_DIGEST: << parameters.image_digest >>
+        PARAM_IMAGE_DIGEST_REF: << parameters.image_digest_ref >>
         PARAM_TAGS_FILE: << parameters.tags_file >>
       name: Apply Tags To Image Digest In Registry
       shell: /bin/bash

@@ -39,7 +39,7 @@ jobs:
             while read -r INTAG; do
               docker image ls mydistroless:$INTAG | grep -v REPOSITORY
             done < tags.txt
-      - container-tagger-orb/populate_tag
+      - container-tagger-orb/export_tag
       - run:
           name: Verify Environment Variables
           command: |
@@ -48,57 +48,58 @@ jobs:
               exit 1
             fi
             echo "The TAG environment variable was set: ${TAG}"
-      - container-tagger-orb/populate_image_uri:
+      - container-tagger-orb/export_image_ref:
           image: gcr.io/distroless/static
       - run:
           name: Verify Environment Variables
           command: |
-            if [[ -z $IMAGE_URI ]]; then
-              echo "Expected IMAGE_URI to be set, but it was not."
+            if [[ -z $IMAGE_REF ]]; then
+              echo "Expected IMAGE_REF to be set, but it was not."
               exit 1
             fi
-            echo "The IMAGE_URI environment variable was set: ${IMAGE_URI}"
+            echo "The IMAGE_REF environment variable was set: ${IMAGE_REF}"
       - run:
           name: Setup Digest Test
           command: |
             echo "export TAG=latest" >> ${BASH_ENV}
-            echo "export IMAGE_URI=gcr.io/distroless/static:latest" >> ${BASH_ENV}
-      - container-tagger-orb/populate_image_uri_digest
+            echo "export IMAGE_REF=gcr.io/distroless/static:latest" >> ${BASH_ENV}
+      - container-tagger-orb/export_image_digest_ref
       - run:
           name: Verify Environment Variables
           command: |
-            if [[ ! "${IMAGE_URI_DIGEST}" =~ ^gcr.io/distroless/static@sha256:[0-9a-f]{64}$ ]]; then
-              echo "Expected gcr.io/distroless/static@sha256:<64 hex>, got: ${IMAGE_URI_DIGEST}"
+            if [[ ! "${IMAGE_DIGEST_REF}" =~ ^gcr.io/distroless/static@sha256:[0-9a-f]{64}$ ]]; then
+              echo "Expected gcr.io/distroless/static@sha256:<64 hex>, got: ${IMAGE_DIGEST_REF}"
               exit 1
             fi
-            echo "The IMAGE_URI_DIGEST environment variable was set: ${IMAGE_URI_DIGEST}"
+            echo "The IMAGE_DIGEST_REF environment variable was set: ${IMAGE_DIGEST_REF}"
       - run:
-          name: Setup Source Tag Test
+          name: Setup Git Tag Test
           # On a tag pipeline, CIRCLE_TAG would rightly conflict with this fixed
-          # source_tag. Clear it for the remaining steps so branch and tag
+          # git_tag. Clear it for the remaining steps so branch and tag
           # pipelines run the same check.
           command: |
             echo "export RELEASE_TAG=v9.8.7-rc.1" >> "${BASH_ENV}"
             echo "export CIRCLE_TAG=" >> "${BASH_ENV}"
       - container-tagger-orb/generate_tags:
-          outfile: source-tags.txt
-          source_tag: ${RELEASE_TAG}
-      - container-tagger-orb/populate_tag:
-          source_tag: ${RELEASE_TAG}
-          tag_env_var: SOURCE_TAG_RESULT
+          tags_file: ~/release-tags.txt
+          git_tag: ${RELEASE_TAG}
+      - container-tagger-orb/export_tag:
+          git_tag: ${RELEASE_TAG}
+          tag_env_var: GIT_TAG_RESULT
       - run:
-          name: Verify Source Tag Results
+          name: Verify Git Tag Results
           command: |
-            if [[ "$(cat source-tags.txt)" != "9.8.7-rc.1" ]]; then
-              echo "Expected only 9.8.7-rc.1 in source-tags.txt, got:"
-              cat source-tags.txt
+            # tags_file: ~/release-tags.txt is written under $HOME.
+            if [[ "$(cat "${HOME}/release-tags.txt")" != "9.8.7-rc.1" ]]; then
+              echo "Expected only 9.8.7-rc.1 in ${HOME}/release-tags.txt, got:"
+              cat "${HOME}/release-tags.txt"
               exit 1
             fi
-            if [[ "${SOURCE_TAG_RESULT}" != "9.8.7-rc.1" ]]; then
-              echo "Expected SOURCE_TAG_RESULT=9.8.7-rc.1, got: ${SOURCE_TAG_RESULT}"
+            if [[ "${GIT_TAG_RESULT}" != "9.8.7-rc.1" ]]; then
+              echo "Expected GIT_TAG_RESULT=9.8.7-rc.1, got: ${GIT_TAG_RESULT}"
               exit 1
             fi
-            echo "source_tag produced the exact pre-release tag only."
+            echo "git_tag produced the exact pre-release tag only."
 workflows:
   test-deploy:
     jobs:

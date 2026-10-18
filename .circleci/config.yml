@@ -25,14 +25,25 @@ jobs:
       - run:
           name: Run tag selection tests
           command: bash test/generate_tags_test.sh
-  test-image-digest:
+  test-image-refs:
     docker:
       - image: cimg/base:current
     steps:
       - checkout
       - run:
-          name: Run image digest tests
-          command: bash test/populate_image_uri_digest_test.sh
+          name: Run image reference tests
+          command: bash test/export_image_ref_test.sh
+      - run:
+          name: Run image digest reference tests
+          command: bash test/export_image_digest_ref_test.sh
+  test-tilde-paths:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Run ~ path expansion tests
+          command: bash test/tilde_test.sh
   test-tag-digest:
     docker:
       - image: cimg/base:current
@@ -78,7 +89,9 @@ workflows:
           filters: *filters
       - test-tag-selection:
           filters: *filters
-      - test-image-digest:
+      - test-image-refs:
+          filters: *filters
+      - test-tilde-paths:
           filters: *filters
       - test-tag-digest:
           filters: *filters
@@ -95,5 +108,5 @@ workflows:
           pipeline_number: << pipeline.number >>
           vcs_type: << pipeline.project.type >>
           orb_name: container-tagger-orb
-          requires: [test-env-subst, test-tag-selection, test-image-digest, test-tag-digest, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
+          requires: [test-env-subst, test-tag-selection, test-image-refs, test-tilde-paths, test-tag-digest, orb-tools/lint, orb-tools/pack, orb-tools/review, shellcheck/check]
           filters: *filters

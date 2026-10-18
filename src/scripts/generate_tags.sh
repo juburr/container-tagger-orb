@@ -4,10 +4,18 @@ set -e
 set +o history
 
 # Read command arguments
-OUTFILE=$(printf '%s' "${PARAM_OUTFILE}" | circleci env subst)
-PACKAGE=$(printf '%s' "${PARAM_PACKAGE}" | circleci env subst)
-SOURCE_TAG_PARAM="${PARAM_SOURCE_TAG-}"
-SOURCE_TAG=$(printf '%s' "${SOURCE_TAG_PARAM}" | circleci env subst)
+TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
+GIT_TAG_PREFIX=$(printf '%s' "${PARAM_GIT_TAG_PREFIX}" | circleci env subst)
+GIT_TAG_PARAM="${PARAM_GIT_TAG-}"
+GIT_TAG=$(printf '%s' "${GIT_TAG_PARAM}" | circleci env subst)
+
+# The shell expands ~ only in words it parses itself, so a parameter value such
+# as ~/workspace/tags.txt arrives with a literal ~. Expand ~ and ~/ the way a
+# shell would; ~user is left alone.
+case "${TAGS_FILE}" in
+    \~) TAGS_FILE="${HOME}" ;;
+    \~/*) TAGS_FILE="${HOME}/${TAGS_FILE#"~/"}" ;;
+esac
 
 # Print arguments for debugging purposes
 echo "Input arguments for tag generation command:"
@@ -15,12 +23,12 @@ echo "  CIRCLE_BRANCH: ${CIRCLE_BRANCH}"
 echo "  CIRCLE_BUILD_NUM: ${CIRCLE_BUILD_NUM}"
 echo "  CIRCLE_SHA1: ${CIRCLE_SHA1}"
 echo "  CIRCLE_TAG: ${CIRCLE_TAG}"
-echo "  OUTFILE: ${OUTFILE}"
-echo "  PACKAGE: ${PACKAGE}"
-echo "  SOURCE_TAG: ${SOURCE_TAG}"
+echo "  TAGS_FILE: ${TAGS_FILE}"
+echo "  GIT_TAG_PREFIX: ${GIT_TAG_PREFIX}"
+echo "  GIT_TAG: ${GIT_TAG}"
 echo ""
 
-# Supported release tags, after an optional package prefix:
+# Supported release tags, after an optional git_tag_prefix:
 #   v1.2.3
 #   v1.2.3-rc1, v1.2.3-alpha1, v1.2.3-beta4
 #   v1.2.3-rc, v1.2.3-alpha, v1.2.3-beta
@@ -29,46 +37,46 @@ echo ""
 RELEASE_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$'
 RELEASE_TAG_HELP="Expected vMAJOR.MINOR.PATCH with an optional -alpha, -beta, or -rc suffix, for example v2.0.0, v2.0.0-rc1, v2.0.0-rc, or v2.0.0-rc.1."
 
-# Pick the release identity. A set source_tag is the only identity: it must be
-# a supported release tag, and nothing falls back to CIRCLE_TAG, CIRCLE_BRANCH,
-# edge, or a sha tag. With a package it must be the full tag name,
-# <package>/vX.Y.Z, because vX.Y.Z and <package>/vX.Y.Z are different git tags.
+# Pick the release identity. A set git_tag is the only identity: it must be a
+# supported release tag, and nothing falls back to CIRCLE_TAG, CIRCLE_BRANCH,
+# edge, or a sha tag. With a git_tag_prefix it must be the full tag name,
+# <prefix>/vX.Y.Z, because vX.Y.Z and <prefix>/vX.Y.Z are different git tags.
 # A parameter that was set but expanded to nothing, such as ${RELEASE_TAG} when
 # that variable is empty, is an error rather than "unset".
 TAG=""
 IDENTITY_SOURCE=""
-if [[ -n "${SOURCE_TAG_PARAM}" ]]; then
-    if [[ -z "${SOURCE_TAG}" ]]; then
-        echo "Error: source_tag '${SOURCE_TAG_PARAM}' expanded to an empty value."
+if [[ -n "${GIT_TAG_PARAM}" ]]; then
+    if [[ -z "${GIT_TAG}" ]]; then
+        echo "Error: git_tag '${GIT_TAG_PARAM}' expanded to an empty value."
         echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
         exit 1
     fi
-    if [[ -n "${CIRCLE_TAG}" && "${CIRCLE_TAG}" != "${SOURCE_TAG}" ]]; then
-        echo "Error: source_tag '${SOURCE_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'."
+    if [[ -n "${CIRCLE_TAG}" && "${CIRCLE_TAG}" != "${GIT_TAG}" ]]; then
+        echo "Error: git_tag '${GIT_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'."
         echo "Refusing to choose between two release identities."
         exit 1
     fi
-    if [[ -n "${PACKAGE}" ]]; then
-        if [[ "${SOURCE_TAG}" != "${PACKAGE}/"* ]]; then
-            echo "Error: source_tag '${SOURCE_TAG}' is not a tag of package '${PACKAGE}'."
-            echo "With a package, source_tag must be the full tag name, ${PACKAGE}/vMAJOR.MINOR.PATCH."
+    if [[ -n "${GIT_TAG_PREFIX}" ]]; then
+        if [[ "${GIT_TAG}" != "${GIT_TAG_PREFIX}/"* ]]; then
+            echo "Error: git_tag '${GIT_TAG}' is not in the git_tag_prefix '${GIT_TAG_PREFIX}' namespace."
+            echo "With a git_tag_prefix, git_tag must be the full tag name, ${GIT_TAG_PREFIX}/vMAJOR.MINOR.PATCH."
             echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
             exit 1
         fi
-        TAG="${SOURCE_TAG#"${PACKAGE}/"}"
+        TAG="${GIT_TAG#"${GIT_TAG_PREFIX}/"}"
     else
-        TAG="${SOURCE_TAG}"
+        TAG="${GIT_TAG}"
     fi
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
-        echo "Error: source_tag '${SOURCE_TAG}' is not a supported release tag."
+        echo "Error: git_tag '${GIT_TAG}' is not a supported release tag."
         echo "${RELEASE_TAG_HELP}"
         echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags."
         exit 1
     fi
-    IDENTITY_SOURCE="source_tag"
-    echo "Release identity: source_tag '${SOURCE_TAG}'. CIRCLE_TAG and CIRCLE_BRANCH are not used."
+    IDENTITY_SOURCE="git_tag"
+    echo "Release identity: git_tag '${GIT_TAG}'. CIRCLE_TAG and CIRCLE_BRANCH are not used."
 elif [[ -n "${CIRCLE_TAG}" ]]; then
-    TAG="${CIRCLE_TAG#"${PACKAGE}/"}"
+    TAG="${CIRCLE_TAG#"${GIT_TAG_PREFIX}/"}"
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
         echo "Error: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag."
         echo "${RELEASE_TAG_HELP}"
@@ -83,13 +91,13 @@ fi
 echo ""
 
 echo "Computing absolute path for output tag file..."
-OUTFILE=$(realpath --no-symlinks "${OUTFILE}")
-echo "  OUTFILE: ${OUTFILE}"
+TAGS_FILE=$(realpath --no-symlinks "${TAGS_FILE}")
+echo "  TAGS_FILE: ${TAGS_FILE}"
 echo ""
 
 # Reset the output file, in case the script is ran multiple times.
-echo "Truncating ${OUTFILE}..."
-truncate -s 0 "${OUTFILE}"
+echo "Truncating ${TAGS_FILE}..."
+truncate -s 0 "${TAGS_FILE}"
 echo "  Done."
 echo ""
 
@@ -582,19 +590,19 @@ load_git_tags() {
     rm -f "${err_file}"
 }
 
-# Print the final releases in this package's namespace, one vX.Y.Z per line.
-# A package owns exactly "<package>/vX.Y.Z". No package owns tags without a
-# slash. The old filter built grep and sed patterns from the package, so an
-# empty package turned into s#/## and stripped the first slash of any tag, and
-# its unanchored version match also kept tags such as wip-v5.0.0. Either could
-# outrank this release and take :latest. The prefix is now removed by literal
-# string match, so a package name is never read as a pattern.
-package_final_versions() {
+# Print the final releases in this git_tag_prefix namespace, one vX.Y.Z per
+# line. A prefix owns exactly "<prefix>/vX.Y.Z". Without a prefix, only tags
+# without a slash count. The old filter built grep and sed patterns from the
+# prefix, so an empty prefix turned into s#/## and stripped the first slash of
+# any tag, and its unanchored version match also kept tags such as wip-v5.0.0.
+# Either could outrank this release and take :latest. The prefix is now
+# removed by literal string match, so it is never read as a pattern.
+prefix_final_versions() {
     local name version
     while IFS= read -r name; do
-        if [[ -n "${PACKAGE}" ]]; then
-            [[ "${name}" == "${PACKAGE}/"* ]] || continue
-            version="${name#"${PACKAGE}/"}"
+        if [[ -n "${GIT_TAG_PREFIX}" ]]; then
+            [[ "${name}" == "${GIT_TAG_PREFIX}/"* ]] || continue
+            version="${name#"${GIT_TAG_PREFIX}/"}"
         else
             [[ "${name}" != */* ]] || continue
             version="${name}"
@@ -612,7 +620,7 @@ echo "  TAG: ${TAG}"
 
 if [[ -n "${IDENTITY_SOURCE}" ]]; then
     echo "  Processing release as a new tag. ${IDENTITY_SOURCE} contained a supported release tag."
-    echo "${TAG#v}" >> "${OUTFILE}"
+    echo "${TAG#v}" >> "${TAGS_FILE}"
     echo "  Added tag to file: ${TAG#v}"
 
     MAJOR_VER=$(echo "${TAG}" | cut -c 2- | cut -d . -f 1)
@@ -627,8 +635,8 @@ if [[ -n "${IDENTITY_SOURCE}" ]]; then
     echo "  PRERELEASE_VER: ${PRERELEASE_VER}"
 
     ADDED_TAG=$TAG
-    if [[ -n "$PACKAGE" ]]; then
-        ADDED_TAG="${PACKAGE}/${TAG}"
+    if [[ -n "${GIT_TAG_PREFIX}" ]]; then
+        ADDED_TAG="${GIT_TAG_PREFIX}/${TAG}"
     fi
     echo "  ADDED_TAG: ${ADDED_TAG}"
 
@@ -641,7 +649,7 @@ if [[ -n "${IDENTITY_SOURCE}" ]]; then
             exit 1
         fi
 
-        RELEASED_VERSIONS=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | package_final_versions)
+        RELEASED_VERSIONS=$(printf '%s\n' "${GIT_TAGS}" "${ADDED_TAG}" | prefix_final_versions)
         HIGHEST_VERSION=$(printf '%s\n' "${RELEASED_VERSIONS}" | sort -r --version-sort | head -n 1)
         echo "  HIGHEST_VERSION: ${HIGHEST_VERSION}"
         # Match a whole numeric component. An unescaped "." matches any character,
@@ -653,17 +661,17 @@ if [[ -n "${IDENTITY_SOURCE}" ]]; then
 
 
         if [[ ${TAG} == "${HIGHEST_WITH_SAME_MINOR}" ]] ; then
-	        echo "${MAJOR_VER}.${MINOR_VER}" >> "${OUTFILE}"
+	        echo "${MAJOR_VER}.${MINOR_VER}" >> "${TAGS_FILE}"
             echo "  Added tag to output file: ${MAJOR_VER}.${MINOR_VER}"
         fi
 
         if [[ ${TAG} == "${HIGHEST_WITH_SAME_MAJOR}" ]] ; then
-	        echo "${MAJOR_VER}" >> "${OUTFILE}"
+	        echo "${MAJOR_VER}" >> "${TAGS_FILE}"
             echo "  Added tag to output file: ${MAJOR_VER}"
         fi
 
         if [[ ${TAG} == "${HIGHEST_VERSION}" ]] ; then
-	        echo "latest" >> "${OUTFILE}"
+	        echo "latest" >> "${TAGS_FILE}"
             echo "  Added tag to output file: latest"
         fi
     else
@@ -671,16 +679,16 @@ if [[ -n "${IDENTITY_SOURCE}" ]]; then
     fi
 elif [ "$CIRCLE_BRANCH" = develop ] || [ "$CIRCLE_BRANCH" = main ] || [ "$CIRCLE_BRANCH" = master ]; then
     echo "  Processing as a merged pull request. The CIRCLE_BRANCH was set to a known trunk branch."
-    echo "edge" >> "${OUTFILE}"
-    echo "${CIRCLE_BRANCH}-${SHORT_REVISION}" >> "${OUTFILE}"
+    echo "edge" >> "${TAGS_FILE}"
+    echo "${CIRCLE_BRANCH}-${SHORT_REVISION}" >> "${TAGS_FILE}"
     echo "  Added tag to output file: ${CIRCLE_BRANCH}-${SHORT_REVISION}"
 else
     echo "  Processing as a commit to a development branch."
-    echo "dev-${SHORT_REVISION}" >> "${OUTFILE}"
+    echo "dev-${SHORT_REVISION}" >> "${TAGS_FILE}"
     echo "  Added tag to output file: dev-${SHORT_REVISION}"
 fi
 echo "  Done."
 echo ""
 
-echo "The following tags were generated and written to ${OUTFILE}:"
-awk '{print "  :"$1}' "${OUTFILE}"
+echo "The following tags were generated and written to ${TAGS_FILE}:"
+awk '{print "  :"$1}' "${TAGS_FILE}"

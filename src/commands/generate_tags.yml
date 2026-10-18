@@ -2,28 +2,33 @@ description: >
   Generates tags for a container image. A final release reads tag names from
   the checkout and its remote before publishing latest, major, or minor tags.
 parameters:
-  outfile:
+  tags_file:
     type: string
     default: tags.txt
-    description: The file to output the list of tags to.
-  package:
-    type: string
-    default: ""
-    description: Optional tag prefix, such as those used in Go monorepos.
-  source_tag:
+    description: >
+      Path of the file to write the generated container tags to, one per line. The file is created or truncated.
+      A leading ~/ is expanded to $HOME.
+  git_tag_prefix:
     type: string
     default: ""
     description: >
-      Optional release tag to use instead of CIRCLE_TAG, for releases that do not run from a tag pipeline, for example ${RELEASE_TAG}.
-      When set, it is the only release identity: it must be a supported release tag (with a package, the full <package>/vX.Y.Z name),
+      Optional git tag namespace prefix for monorepos, without a trailing slash. For example, svc/auth matches
+      git tags like svc/auth/v1.2.3, and only tags in that namespace are compared. The generated container tags
+      never include the prefix: svc/auth/v1.2.3 produces 1.2.3, not svc/auth/1.2.3. Leave empty for tags like v1.2.3.
+  git_tag:
+    type: string
+    default: ""
+    description: >
+      Optional git tag of the release, used instead of CIRCLE_TAG for releases that do not run from a tag pipeline, for example ${RELEASE_TAG}.
+      When set, it is the only release identity: it must be a supported release tag (with a git_tag_prefix, the full <git_tag_prefix>/vX.Y.Z name),
       it must equal CIRCLE_TAG when CIRCLE_TAG is set, and there is no fallback to edge or sha tags.
       A value that expands to an empty string is an error. Leave empty to use CIRCLE_TAG and CIRCLE_BRANCH.
 steps:
   - run:
       environment:
-        PARAM_OUTFILE: << parameters.outfile >>
-        PARAM_PACKAGE: << parameters.package >>
-        PARAM_SOURCE_TAG: << parameters.source_tag >>
+        PARAM_TAGS_FILE: << parameters.tags_file >>
+        PARAM_GIT_TAG_PREFIX: << parameters.git_tag_prefix >>
+        PARAM_GIT_TAG: << parameters.git_tag >>
       name: Generate Tags
       shell: /bin/bash
       command: <<include(scripts/generate_tags.sh)>>

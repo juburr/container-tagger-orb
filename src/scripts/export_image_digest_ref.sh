@@ -1,6 +1,8 @@
 #!/bin/bash
 
-# Export REPOSITORY@DIGEST for later steps in this job.
+# Export an image digest reference, REPOSITORY@DIGEST, for later steps in this
+# job. The digest is read for the image reference (<image>:<tag>) held in the
+# variable that export_image_ref wrote.
 #
 # crane digest is used when crane is installed, because it reads the registry.
 # Otherwise docker's RepoDigests is used. The step fails when that read fails,
@@ -62,19 +64,19 @@ image_is_missing() {
     return 1
 }
 
-IMAGE_URI_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_URI_ENV_VAR}" | circleci env subst)
-IMAGE_URI_DIGEST_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_URI_DIGEST_ENV_VAR}" | circleci env subst)
+IMAGE_REF_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_REF_ENV_VAR}" | circleci env subst)
+IMAGE_DIGEST_REF_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_DIGEST_REF_ENV_VAR}" | circleci env subst)
 
-echo "Populating image digest environment variable..."
-echo "  IMAGE_URI_ENV_VAR: ${IMAGE_URI_ENV_VAR}"
-echo "  IMAGE_URI_DIGEST_ENV_VAR: ${IMAGE_URI_DIGEST_ENV_VAR}"
+echo "Exporting the image digest reference environment variable..."
+echo "  IMAGE_REF_ENV_VAR: ${IMAGE_REF_ENV_VAR}"
+echo "  IMAGE_DIGEST_REF_ENV_VAR: ${IMAGE_DIGEST_REF_ENV_VAR}"
 
-if [[ ! "${IMAGE_URI_ENV_VAR}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-    echo "Error: image URI env var name '${IMAGE_URI_ENV_VAR}' is not a shell identifier."
+if [[ ! "${IMAGE_REF_ENV_VAR}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "Error: image_ref_env_var '${IMAGE_REF_ENV_VAR}' is not a shell identifier."
     exit 1
 fi
-if [[ ! "${IMAGE_URI_DIGEST_ENV_VAR}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-    echo "Error: image digest env var name '${IMAGE_URI_DIGEST_ENV_VAR}' is not a shell identifier."
+if [[ ! "${IMAGE_DIGEST_REF_ENV_VAR}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "Error: image_digest_ref_env_var '${IMAGE_DIGEST_REF_ENV_VAR}' is not a shell identifier."
     exit 1
 fi
 if [[ -z "${BASH_ENV:-}" ]]; then
@@ -83,24 +85,24 @@ if [[ -z "${BASH_ENV:-}" ]]; then
 fi
 
 # The name matched the identifier pattern above, so this indirect expansion is safe.
-IMAGE_URI="${!IMAGE_URI_ENV_VAR-}"
-echo "  IMAGE_URI: ${IMAGE_URI}"
+IMAGE_REF="${!IMAGE_REF_ENV_VAR-}"
+echo "  IMAGE_REF: ${IMAGE_REF}"
 
-if [[ -z "${IMAGE_URI}" ]]; then
-    echo "Error: ${IMAGE_URI_ENV_VAR} is empty."
-    echo "Run populate_image_uri before populate_image_uri_digest."
+if [[ -z "${IMAGE_REF}" ]]; then
+    echo "Error: ${IMAGE_REF_ENV_VAR} is empty."
+    echo "Run export_image_ref before export_image_digest_ref."
     exit 1
 fi
-if [[ "${IMAGE_URI}" == *[[:space:]]* ]]; then
-    echo "Error: ${IMAGE_URI_ENV_VAR} contains whitespace, so the registry digest cannot be read."
+if [[ "${IMAGE_REF}" == *[[:space:]]* ]]; then
+    echo "Error: ${IMAGE_REF_ENV_VAR} contains whitespace, so the registry digest cannot be read."
     exit 1
 fi
 
-IMAGE="$(repository_name "${IMAGE_URI}")"
+IMAGE="$(repository_name "${IMAGE_REF}")"
 IMAGE_LAST="${IMAGE##*/}"
 echo "  IMAGE: ${IMAGE}"
 if [[ -z "${IMAGE}" || -z "${IMAGE_LAST}" || "${IMAGE}" == *@* || "${IMAGE_LAST}" == *:* ]]; then
-    echo "Error: could not parse a repository name from '${IMAGE_URI}', so the registry digest cannot be read."
+    echo "Error: could not parse a repository name from '${IMAGE_REF}', so the registry digest cannot be read."
     exit 1
 fi
 
@@ -111,8 +113,8 @@ if command -v crane >/dev/null 2>&1; then
     echo "  TOOL: crane"
     # A failing crane is fatal. Falling through to a local docker image would
     # publish a different digest and hide the registry failure.
-    if ! DIGEST="$(crane digest "${IMAGE_URI}" 2>"$err_file")"; then
-        echo "Error: crane digest failed for '${IMAGE_URI}', so the registry digest cannot be read."
+    if ! DIGEST="$(crane digest "${IMAGE_REF}" 2>"$err_file")"; then
+        echo "Error: crane digest failed for '${IMAGE_REF}', so the registry digest cannot be read."
         cat "$err_file"
         exit 1
     fi
@@ -122,17 +124,17 @@ if command -v crane >/dev/null 2>&1; then
     fi
 elif command -v docker >/dev/null 2>&1; then
     echo "  TOOL: docker"
-    if docker image inspect "${IMAGE_URI}" >/dev/null 2>"$err_file"; then
+    if docker image inspect "${IMAGE_REF}" >/dev/null 2>"$err_file"; then
         echo "The image exists locally."
     elif image_is_missing "$(cat "$err_file")"; then
-        echo "The image does not exist locally. Pulling ${IMAGE_URI}..."
-        if ! docker pull "${IMAGE_URI}" 2>"$err_file"; then
-            echo "Error: docker pull failed for '${IMAGE_URI}', so the registry digest cannot be read."
+        echo "The image does not exist locally. Pulling ${IMAGE_REF}..."
+        if ! docker pull "${IMAGE_REF}" 2>"$err_file"; then
+            echo "Error: docker pull failed for '${IMAGE_REF}', so the registry digest cannot be read."
             cat "$err_file"
             exit 1
         fi
     else
-        echo "Error: docker image inspect failed for '${IMAGE_URI}', so the registry digest cannot be read."
+        echo "Error: docker image inspect failed for '${IMAGE_REF}', so the registry digest cannot be read."
         cat "$err_file"
         exit 1
     fi
@@ -140,8 +142,8 @@ elif command -v docker >/dev/null 2>&1; then
     # RepoDigests names whichever registry this daemon stored first. Keep that
     # digest, and attach it to the repository name we were asked for. An empty
     # list renders as an empty string instead of a template error.
-    if ! DIGEST="$(docker inspect --format='{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "${IMAGE_URI}" 2>"$err_file")"; then
-        echo "Error: docker inspect failed for '${IMAGE_URI}', so the registry digest cannot be read."
+    if ! DIGEST="$(docker inspect --format='{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "${IMAGE_REF}" 2>"$err_file")"; then
+        echo "Error: docker inspect failed for '${IMAGE_REF}', so the registry digest cannot be read."
         cat "$err_file"
         exit 1
     fi
@@ -154,23 +156,23 @@ DIGEST="$(normalize_digest "${DIGEST}")"
 echo "  DIGEST=${DIGEST}"
 
 if [[ -z "${DIGEST}" || "${DIGEST}" == "<no value>" ]]; then
-    echo "Error: no registry digest was returned for '${IMAGE_URI}', so the registry digest cannot be read."
+    echo "Error: no registry digest was returned for '${IMAGE_REF}', so the registry digest cannot be read."
     echo "crane reads the registry. docker can only use a RepoDigest already stored for a pulled or pushed image."
     exit 1
 fi
 if ! valid_digest "${DIGEST}"; then
-    echo "Error: digest '${DIGEST}' for '${IMAGE_URI}' is not a sha256, sha384, or sha512 digest, so the registry digest cannot be read."
+    echo "Error: digest '${DIGEST}' for '${IMAGE_REF}' is not a sha256, sha384, or sha512 digest, so the registry digest cannot be read."
     exit 1
 fi
 
-IMAGE_DIGEST="${IMAGE}@${DIGEST}"
-echo "  IMAGE_DIGEST=${IMAGE_DIGEST}"
+IMAGE_DIGEST_REF="${IMAGE}@${DIGEST}"
+echo "  IMAGE_DIGEST_REF=${IMAGE_DIGEST_REF}"
 echo "Exporting value..."
 
 # Write the file ourselves. A pipeline into tee would report the status of
 # printf, so a BASH_ENV that cannot be written would still exit 0.
-export "${IMAGE_URI_DIGEST_ENV_VAR}=${IMAGE_DIGEST}"
-export_line="$(printf 'export %s=%q' "${IMAGE_URI_DIGEST_ENV_VAR}" "${IMAGE_DIGEST}")"
+export "${IMAGE_DIGEST_REF_ENV_VAR}=${IMAGE_DIGEST_REF}"
+export_line="$(printf 'export %s=%q' "${IMAGE_DIGEST_REF_ENV_VAR}" "${IMAGE_DIGEST_REF}")"
 printf '%s\n' "${export_line}"
 printf '%s\n' "${export_line}" >> "${BASH_ENV}"
 printf 'Done setting environment variable.\n'
