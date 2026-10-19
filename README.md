@@ -335,9 +335,6 @@ Applies every tag in the tags file to `target_image` with a local container tool
 | `append_tags_to_source` | `false` | Use `source_image:<tag>` as the source of each tag, instead of `source_image`. |
 | `push` | `false` | Push each tag after tagging, as `push` does. |
 
-> [!WARNING]
-> With `tool: buildah`, `tag` can't find a local image. It checks with `buildah image inspect`, which buildah doesn't have, so it always pulls `source_image` from its registry, and an image that exists only locally fails. Use `docker` or `podman` for `tag`. `push` works with `buildah`.
-
 ### `tagger/push`
 
 Pushes `target_image:<tag>` for every tag in the tags file, from the local container tool. Log in to the registry first. Handles one platform; see [Multi-Platform Images](#-multi-platform-images).
@@ -410,12 +407,13 @@ Behavior changes:
 - A leading `~/` in `tags_file` and `expected_digests_file` now means `$HOME`. It used to be taken literally, as a path under a directory named `~` in the working directory.
 - `export_tag` and `export_image_ref` write shell-quoted values to `BASH_ENV`, as `export_image_digest_ref` already did.
 - Error messages start with `ERROR:` instead of `Error:` (or no prefix), and go to stderr. A step that searches a command's output for an error must read stderr too.
+- With `tool: buildah`, `tag` finds a local `source_image` with `buildah inspect --type image`. It used `buildah image inspect`, which buildah doesn't have, so it reported every source image as missing and ran `buildah pull` for each tag. With buildah's default pull policy (`missing`), that pull found the local copy, so tagging still worked.
 
 ## 🔒 Secure by Design
 
 - **Least Privilege**: No `sudo` anywhere in this orb, and nothing to install: the commands use the `git`, `docker`, `podman`, `buildah` or `crane` already on your executor.
 - **Integrity**: The orb fails rather than guess. An unsupported release tag, a `git_tag` that expands to nothing, an unreadable remote tag list or several remotes without `origin` all fail the step, so a release can't take floating tags it shouldn't. `tag_digest` only tags a digest the registry confirms, can refuse to write when tags moved since you planned (`expected_digests_file`), and checks every tag afterwards.
-- **Provenance**: The orb installs and downloads no tools. Tags come from your repository's git tags, and images from your own build or registry: `tag`, and `export_image_digest_ref` with `docker`, pull an image only when it isn't already local (with `tool: buildah`, `tag` always pulls; see the warning under [`tagger/tag`](#taggertag)).
+- **Provenance**: The orb installs and downloads no tools. Tags come from your repository's git tags, and images from your own build or registry: `tag`, and `export_image_digest_ref` with `docker`, pull an image only when it isn't already local.
 - **Confidentiality**: The orb never takes registry credentials; `push` and `tag_digest` use the login already in your Docker config. Credentials embedded in an HTTP or HTTPS remote URL are kept off the git command line, redacted from the error output `generate_tags` prints, and held in a private `mktemp` directory that is removed when the step exits; shell tracing is off while it runs. Exported values are shell-quoted with `printf %q`, so no value can break or inject into later steps.
 - **Privacy**: No usage data of any kind is collected or shipped back to the orb developer.
 
@@ -441,7 +439,7 @@ Hosts to allow when running on a locked-down or self-hosted runner. The orb inst
 | Host | Needed by | Purpose |
 | --- | --- | --- |
 | Your checkout's git remote, e.g. `github.com` (HTTPS on port 443, or SSH on port 22 for a `git@` remote) | `generate_tags`, for a final release | `git ls-remote` reads the remote's tag names, to choose `:latest`, `:X` and `:X.Y` |
-| The registry of `source_image`, plus the authentication and storage hosts it redirects to | `tag`, when `source_image` isn't local, or always with `tool: buildah` | Pulling the image to tag |
+| The registry of `source_image`, plus the authentication and storage hosts it redirects to | `tag`, when `source_image` isn't local | Pulling the image to tag |
 | The registry of `target_image`, likewise | `push`, and `tag` with `push: true` | Pushing each tag |
 | The registry in `image_digest_ref`, likewise | `tag_digest` | Reading digests and writing tags with `crane` |
 | The registry of the image in `IMAGE_REF`, likewise | `export_image_digest_ref` | Reading the digest with `crane`, or pulling the image with `docker` when it isn't local |
@@ -453,7 +451,7 @@ Hosts to allow when running on a locked-down or self-hosted runner. The orb inst
 This is a community-maintained orb, and contributions are welcome! Bug reports, feature ideas and pull requests all help.
 
 - **Found a bug or have an idea?** [Open an issue](https://github.com/juburr/container-tagger-orb/issues).
-- **Before opening a pull request**, run the checks CI runs. Most tests run offline with stand-ins for `git` remotes, `crane`, `docker` and `circleci`; `test/tag_digest_registry_test.sh` needs `crane`, `jq`, a `registry:2` on `localhost:5000` and network access to `gcr.io`, as CI provides.
+- **Before opening a pull request**, run the checks CI runs. Most tests run offline with stand-ins for `git` remotes, `crane`, `docker`, `podman`, `buildah` and `circleci`; `test/tag_digest_registry_test.sh` needs `crane`, `jq`, a `registry:2` on `localhost:5000` and network access to `gcr.io`, as CI provides.
 
   ```bash
   yamllint .
