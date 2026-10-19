@@ -103,6 +103,7 @@ workflows:
       - orb-tools/pack:
           filters: *filters
       - orb-tools/review:
+          orb_name: tagger
           filters: *filters
       - shellcheck/check:
           filters: *filters
