@@ -42,6 +42,14 @@ if [[ -z "${TARGET_IMAGE}" ]]; then
     exit 1
 fi
 
+# Docker and Podman inspect a local image with "image inspect". buildah has no
+# image subcommand and uses "inspect --type image" instead.
+if [[ "${TOOL}" == "buildah" ]]; then
+    INSPECT_IMAGE=(buildah inspect --type image)
+else
+    INSPECT_IMAGE=("${TOOL}" image inspect)
+fi
+
 # Apply all tags
 while read -r TAG; do
     INNER_SOURCE_IMAGE="${SOURCE_IMAGE}"
@@ -50,7 +58,7 @@ while read -r TAG; do
     fi
 
     # Pull down source image if it doesn't exist locally
-    if "${TOOL}" image inspect "${INNER_SOURCE_IMAGE}" > /dev/null 2>&1; then
+    if "${INSPECT_IMAGE[@]}" "${INNER_SOURCE_IMAGE}" > /dev/null 2>&1; then
         echo "Source image exists locally: ${INNER_SOURCE_IMAGE}"
     else
         echo "Source image does not exist. Attempting to pull: ${INNER_SOURCE_IMAGE}..."
