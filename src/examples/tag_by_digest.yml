@@ -6,7 +6,7 @@ usage:
   version: 2.1
 
   orbs:
-    tagger: juburr/container-tagger-orb@0.8.0
+    tagger: juburr/container-tagger-orb@1.0.0
 
   jobs:
     promote:

@@ -108,7 +108,7 @@ Build an image, generate its tags, and push every tag to GitHub Container Regist
 version: 2.1
 
 orbs:
-  tagger: juburr/container-tagger-orb@0.8.0
+  tagger: juburr/container-tagger-orb@1.0.0
 
 jobs:
   container_build:
@@ -252,7 +252,7 @@ For an image that is already in a registry, use `tag_digest`. It applies every t
 version: 2.1
 
 orbs:
-  tagger: juburr/container-tagger-orb@0.8.0
+  tagger: juburr/container-tagger-orb@1.0.0
 
 jobs:
   promote:
@@ -391,7 +391,7 @@ Environment variables are expanded in `tags_file`, `git_tag_prefix`, `git_tag`, 
 
 ## 📦 Upgrading
 
-Releases after 0.7.4 rename these commands and parameters. `source_tag` and `tag_digest` were added after 0.7.4, so their old names only matter if you tested a development version.
+v1.0.0 renames these commands and parameters. `source_tag` and `tag_digest` were added after 0.7.4, so their old names only matter if you tested a development version.
 
 | Old | New |
 | --- | --- |
