@@ -16,7 +16,7 @@ Floating tags follow release order · Monorepo tag prefixes · Nothing to instal
 [![CircleCI Community](https://img.shields.io/badge/community-CircleCI%20Discuss-343434.svg)](https://discuss.circleci.com/c/ecosystem/orbs)
 
 ![Tags X.Y.Z, X.Y, X and latest](https://img.shields.io/badge/tags-X.Y.Z%20%7C%20X.Y%20%7C%20X%20%7C%20latest-7C3AED?style=for-the-badge&logo=docker&logoColor=white)
-![Docker, Podman or Buildah](https://img.shields.io/badge/tools-docker%20%7C%20podman%20%7C%20buildah-0EA5E9?style=for-the-badge)
+![Docker or Podman](https://img.shields.io/badge/tools-docker%20%7C%20podman-0EA5E9?style=for-the-badge)
 ![Multi-platform images tagged by digest](https://img.shields.io/badge/multi--platform-tag%20by%20digest-16A34A?style=for-the-badge)
 ![No sudo required](https://img.shields.io/badge/sudo-not%20required-DB2777?style=for-the-badge)
 
@@ -58,7 +58,7 @@ Tags like <code>microservices/authservice/v1.0.5</code> work with <code>git_tag_
 </td>
 <td width="33%" valign="top">
 🧰 <b>Your tools, your registry login</b><br><br>
-Tag and push with <code>docker</code>, <code>podman</code> or <code>buildah</code>. The orb installs nothing and never handles registry credentials; it uses the login you already have.
+Tag and push with <code>docker</code> or <code>podman</code>. The orb installs nothing and never handles registry credentials; it uses the login you already have.
 </td>
 </tr>
 </table>
@@ -80,7 +80,7 @@ flowchart LR
     git["Release tags in the checkout<br/>and on its remote"] --> gen
     gen --> file["tags.txt<br/>2.5.2 · 2.5 · 2 · latest"]
     gen -- "unsupported tag or<br/>unreadable remote" --> stop["Step fails"]
-    file --> tag["tag and push<br/>docker · podman · buildah"]
+    file --> tag["tag and push<br/>docker · podman"]
     file --> digest["tag_digest<br/>crane, by digest"]
     tag --> reg["Registry<br/>every tag"]
     digest --> reg
@@ -329,6 +329,9 @@ Applies every tag in the tags file to `target_image` with a local container tool
 | `tool` | `docker` | `docker`, `podman`, or `buildah`. |
 | `append_tags_to_source` | `false` | Use `source_image:<tag>` as the source of each tag, instead of `source_image`. |
 | `push` | `false` | Push each tag after tagging, as `push` does. |
+
+> [!WARNING]
+> With `tool: buildah`, `tag` can't find a local image. It checks with `buildah image inspect`, which buildah doesn't have, so it always pulls `source_image` from its registry, and an image that exists only locally fails. Use `docker` or `podman` for `tag`. `push` works with `buildah`.
 
 ### `tagger/push`
 
