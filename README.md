@@ -267,6 +267,7 @@ jobs:
             case "$(uname -m)" in
               x86_64) arch=x86_64 ;;
               aarch64|arm64) arch=arm64 ;;
+              *) echo "ERROR: no crane build is pinned here for $(uname -m)." >&2; exit 1 ;;
             esac
             curl -fsSL -o crane.tar.gz "https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_${arch}.tar.gz"
             tar -xzf crane.tar.gz crane
@@ -419,10 +420,10 @@ Linux executors on any architecture, since the orb runs no binaries of its own; 
 
 | Command | Needs |
 | --- | --- |
-| `generate_tags` | A git checkout, `git`, and GNU coreutils (`realpath`, `truncate`, `sort --version-sort`), as on `cimg/base` |
+| `generate_tags` | A git checkout, `git`, `grep`, `sed`, `awk`, and GNU coreutils (`mktemp`, `realpath`, `truncate`, `sort --version-sort`, `cut`, `tr`), as on `cimg/base` |
 | `tag`, `push` | `docker`, `podman` or `buildah` (`tool`). With Docker on a Docker executor, run `setup_remote_docker` first. |
-| `tag_digest` | `crane` |
-| `export_image_digest_ref` | `crane`, or `docker` |
+| `tag_digest` | `crane`, `grep`, and `mktemp` |
+| `export_image_digest_ref` | `crane` or `docker`, plus `mktemp`, `tr` and `tee` |
 | `export_tag`, `export_image_ref` | bash and `tee` |
 
 ## 🌐 Network Access
