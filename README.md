@@ -416,15 +416,15 @@ Behavior changes:
 
 ## 💻 Supported Platforms
 
-Linux executors on any architecture, since the orb runs no binaries of its own; CI runs it on `cimg/base` (amd64). Each command runs in bash and needs the tools it calls on `PATH`:
+Linux executors on any architecture, since the orb runs no binaries of its own; CI runs it on `cimg/base` (amd64). Every command runs in bash and uses the standard coreutils (such as `mktemp`, `tee`, `tail` and `tr`). Beyond those, each needs these on `PATH`:
 
 | Command | Needs |
 | --- | --- |
-| `generate_tags` | A git checkout, `git`, `grep`, `sed`, `awk`, and GNU coreutils (`mktemp`, `realpath`, `truncate`, `sort --version-sort`, `cut`, `tr`), as on `cimg/base` |
+| `generate_tags` | A git checkout, `git`, `grep`, `sed` and `awk`, and GNU coreutils specifically (`realpath`, `truncate`, `sort --version-sort`), as on `cimg/base` |
 | `tag`, `push` | `docker`, `podman` or `buildah` (`tool`). With Docker on a Docker executor, run `setup_remote_docker` first. |
-| `tag_digest` | `crane`, `grep`, and `mktemp` |
-| `export_image_digest_ref` | `crane` or `docker`, plus `mktemp`, `tr` and `tee` |
-| `export_tag`, `export_image_ref` | bash and `tee` |
+| `tag_digest` | `crane` and `grep` |
+| `export_image_digest_ref` | `crane`, or `docker` |
+| `export_tag`, `export_image_ref` | Nothing more |
 
 ## 🌐 Network Access
 
