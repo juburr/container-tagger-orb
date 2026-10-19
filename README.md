@@ -199,7 +199,7 @@ Both commands log which identity they used: `git_tag`, `CIRCLE_TAG`, or the bran
 
 ### Use the Tag and Image Reference in Later Steps
 
-`export_tag` writes the most specific tag to `TAG`, `export_image_ref` turns it into `IMAGE_REF`, and after the image is pushed, `export_image_digest_ref` reads its digest into `IMAGE_DIGEST_REF`, ready for signing or for `tag_digest`:
+`export_tag` writes the most specific tag to `TAG`, `export_image_ref` turns it into `IMAGE_REF`, and after the image is pushed, `export_image_digest_ref` reads its digest into `IMAGE_DIGEST_REF`, ready for signing or for `tag_digest` (which takes only sha256 digests, the kind registries report for images; `export_image_digest_ref` also accepts sha384 and sha512):
 
 ```yaml
 - tagger/export_tag                # TAG=1.2.3
@@ -281,11 +281,15 @@ workflows:
       - promote:
           context:
             - yourproject-github-pkg-rw
+          # CircleCI runs no job for a git tag without a tag filter.
+          filters:
+            tags:
+              only: /^v(?!0\d)[0-9]+(\.(?!0\d)[0-9]+){2}(\-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$/
 ```
 
 How it behaves:
 - `crane` must be on `PATH`; this orb does not install it. Registry credentials come from the Docker config, so `docker login` (or `crane auth login`) works.
-- `image_digest_ref` must be `repository@sha256:<64 hex characters>`, and the tags are written to that same repository. `export_image_digest_ref` can produce it as `${IMAGE_DIGEST_REF}`. To promote into another repository, copy by digest first, for example `crane copy src@sha256:... dst@sha256:...`.
+- `image_digest_ref` must be `repository@sha256:<64 hex characters>`, and the tags are written to that same repository. `export_image_digest_ref` can produce it as `${IMAGE_DIGEST_REF}` when the registry reports a sha256 digest. To promote into another repository, copy by digest first, for example `crane copy src@sha256:... dst@sha256:...`.
 - Before writing, each tag's current digest is logged as `<tag> <sha256:...>` or `<tag> absent`.
 - `expected_digests_file` takes that same format, one line per tag in the tags file. If any tag no longer matches, no tag is written. Use it to make sure the tags you planned to move have not moved since. The check runs just before writing and is not atomic; registries have no conditional tag write.
 - A tag that already points at the digest is not rewritten.
