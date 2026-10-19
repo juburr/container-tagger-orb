@@ -263,13 +263,18 @@ jobs:
       - run:
           name: Install crane
           command: |
-            # Pin the version and verify the archive's checksum in practice.
+            # crane v0.22.1, pinned by the SHA-512 of each release archive.
             case "$(uname -m)" in
-              x86_64) arch=x86_64 ;;
-              aarch64|arm64) arch=arm64 ;;
+              x86_64)
+                arch=x86_64
+                sha512=ce98e3589992cc2381fca98c59dec3437c29de347109a6b919919daaabeb2ed11deac2bbc402739ddd8bec3edcb717e382aef301ffc8d2555d642118a949e68c ;;
+              aarch64|arm64)
+                arch=arm64
+                sha512=eae352c81297394b2e31bfd350545ba5fd281fe8a178e9abf38e2c88a88a01628d76708f1444195707874747457bef1c84e0b7b895a4b49fddc20c565dd03c16 ;;
               *) echo "ERROR: no crane build is pinned here for $(uname -m)." >&2; exit 1 ;;
             esac
             curl -fsSL -o crane.tar.gz "https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_${arch}.tar.gz"
+            echo "${sha512}  crane.tar.gz" | sha512sum -c -
             tar -xzf crane.tar.gz crane
             sudo install -m 0755 crane /usr/local/bin/crane
       - run:
@@ -410,7 +415,7 @@ Behavior changes:
 
 - **Least Privilege**: No `sudo` anywhere in this orb, and nothing to install: the commands use the `git`, `docker`, `podman`, `buildah` or `crane` already on your executor.
 - **Integrity**: The orb fails rather than guess. An unsupported release tag, a `git_tag` that expands to nothing, an unreadable remote tag list or several remotes without `origin` all fail the step, so a release can't take floating tags it shouldn't. `tag_digest` only tags a digest the registry confirms, can refuse to write when tags moved since you planned (`expected_digests_file`), and checks every tag afterwards.
-- **Provenance**: The orb installs and downloads no tools. Tags come from your repository's git tags, and images from your own build or registry: `tag`, and `export_image_digest_ref` with `docker`, pull an image only when it isn't already local.
+- **Provenance**: The orb installs and downloads no tools. Tags come from your repository's git tags, and images from your own build or registry: `tag`, and `export_image_digest_ref` with `docker`, pull an image only when it isn't already local (with `tool: buildah`, `tag` always pulls; see the warning under [`tagger/tag`](#taggertag)).
 - **Confidentiality**: The orb never takes registry credentials; `push` and `tag_digest` use the login already in your Docker config. Credentials embedded in an HTTP or HTTPS remote URL are kept off the git command line, redacted from the error output `generate_tags` prints, and held in a private `mktemp` directory that is removed when the step exits; shell tracing is off while it runs. Exported values are shell-quoted with `printf %q`, so no value can break or inject into later steps.
 - **Privacy**: No usage data of any kind is collected or shipped back to the orb developer.
 
@@ -436,7 +441,7 @@ Hosts to allow when running on a locked-down or self-hosted runner. The orb inst
 | Host | Needed by | Purpose |
 | --- | --- | --- |
 | Your checkout's git remote, e.g. `github.com` (HTTPS on port 443, or SSH on port 22 for a `git@` remote) | `generate_tags`, for a final release | `git ls-remote` reads the remote's tag names, to choose `:latest`, `:X` and `:X.Y` |
-| The registry of `source_image`, plus the authentication and storage hosts it redirects to | `tag`, when `source_image` isn't local | Pulling the image to tag |
+| The registry of `source_image`, plus the authentication and storage hosts it redirects to | `tag`, when `source_image` isn't local, or always with `tool: buildah` | Pulling the image to tag |
 | The registry of `target_image`, likewise | `push`, and `tag` with `push: true` | Pushing each tag |
 | The registry in `image_digest_ref`, likewise | `tag_digest` | Reading digests and writing tags with `crane` |
 | The registry of the image in `IMAGE_REF`, likewise | `export_image_digest_ref` | Reading the digest with `crane`, or pulling the image with `docker` when it isn't local |
