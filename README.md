@@ -8,7 +8,7 @@
 
 Generate semantic-version container tags from your git tags, then tag and push them with Docker, Podman or Buildah,<br>
 or retag a multi-platform image in its registry by digest. Three steps of CircleCI config.<br>
-Floating tags never move backwards · Monorepo tag prefixes · Nothing to download, no `sudo`
+Floating tags follow release order · Monorepo tag prefixes · Nothing to install, no `sudo`
 
 [![CircleCI Build Status](https://circleci.com/gh/juburr/container-tagger-orb.svg?style=shield "CircleCI Build Status")](https://circleci.com/gh/juburr/container-tagger-orb)
 [![CircleCI Orb Version](https://badges.circleci.com/orbs/juburr/container-tagger-orb.svg)](https://circleci.com/developer/orbs/orb/juburr/container-tagger-orb)
@@ -36,7 +36,7 @@ When you release a new version of your software, you usually want several tags o
 <tr>
 <td width="33%" valign="top">
 🎯 <b>Floating tags that only move forward</b><br><br>
-A final release gets <code>:X.Y</code>, <code>:X</code> and <code>:latest</code> only when it is the newest release in that series, so a patch to an older line never takes <code>:latest</code> from a newer one.
+A final release gets <code>:X.Y</code>, <code>:X</code> and <code>:latest</code> only when it is the newest release in that series, so a patch to an older line never takes <code>:latest</code> from a newer one. <a href="#-assumptions-and-strategy">Run releases one at a time</a> to keep it that way.
 </td>
 <td width="33%" valign="top">
 🔎 <b>Sees every release, even in a shallow clone</b><br><br>
@@ -166,6 +166,8 @@ This orb requires that your git tags follow semantic versioning. Examples of val
 
 This orb functions by reading git tags to determine which versions already exist. A final release compares the tag being built with tags in the checkout and with tag names from the checkout's remote. `git ls-remote` supplies those names without downloading tagged commits. `origin` is used when it exists; otherwise the sole remote is used. Several remotes and no `origin` is a failure, so the orb does not guess which remote is authoritative. A shallow checkout whose local `git tag` output contains only the current tag still sees older tags on the remote. If that remote list cannot be read, the release fails, so an older tag cannot take the newest floating tags. A checkout with no remote uses local tags, and an empty list is a first release that still publishes the floating tags. Pre-releases leave floating tags unchanged and skip this check.
 
+Run release pipelines one at a time. `generate_tags` decides from the release tags that exist when it runs, so if an older release's pipeline computes its tags before a newer release is tagged, then pushes after it, it moves `:latest`, `:X` or `:X.Y` back to the older image. The orb doesn't serialize pipelines. With `tag_digest`, `expected_digests_file` refuses the write when a tag has moved since you recorded it.
+
 Credentials in the remote URL stay off the command line. An HTTP or HTTPS remote URL that embeds credentials is read without putting those credentials on the git transport command line; the scheme is matched case-insensitively. A password embedded in any other kind of remote URL, such as `ftp://` or `ssh://`, fails the release, because it cannot be kept off that transport's command line. An `@` in the repository path stays part of the path. A URL that contains only a username still uses configured credential helpers for its password, and falls back to an empty password, as git does for `https://TOKEN@host`. That read uses the URL without its userinfo, so `http.<url>.*` settings scoped to a username (`http.https://alice@host.sslCAInfo`) do not apply to it; scope them to the host instead. An `insteadOf` rule that injects credentials and whose value is the remote's entire URL, such as `url."https://TOKEN@host/repo.git".insteadOf "https://host/repo.git"`, fails the release, because the orb cannot override it without the credentials reaching the transport; use a host-level rule (`insteadOf "https://host/"`) instead.
 
 Any merge into `master`, `main`, or `develop` will result in an `:edge` tag being created, along with `:<branch>-<sha>` (the first eight characters of the commit SHA), provided your container build job is within a workflow that builds on non-tagged commits. Commits to any other branch get `:dev-<sha>`.
@@ -262,7 +264,11 @@ jobs:
           name: Install crane
           command: |
             # Pin the version and verify the archive's checksum in practice.
-            curl -fsSL -o crane.tar.gz https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz
+            case "$(uname -m)" in
+              x86_64) arch=x86_64 ;;
+              aarch64|arm64) arch=arm64 ;;
+            esac
+            curl -fsSL -o crane.tar.gz "https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_${arch}.tar.gz"
             tar -xzf crane.tar.gz crane
             sudo install -m 0755 crane /usr/local/bin/crane
       - run:
@@ -400,7 +406,7 @@ Behavior changes:
 
 - **Least Privilege**: No `sudo` anywhere in this orb, and nothing to install: the commands use the `git`, `docker`, `podman`, `buildah` or `crane` already on your executor.
 - **Integrity**: The orb fails rather than guess. An unsupported release tag, a `git_tag` that expands to nothing, an unreadable remote tag list or several remotes without `origin` all fail the step, so a release can't take floating tags it shouldn't. `tag_digest` only tags a digest the registry confirms, can refuse to write when tags moved since you planned (`expected_digests_file`), and checks every tag afterwards.
-- **Provenance**: The orb downloads nothing. Tags come from your repository's git tags, and images from your own build or registry.
+- **Provenance**: The orb installs and downloads no tools. Tags come from your repository's git tags, and images from your own build or registry: `tag`, and `export_image_digest_ref` with `docker`, pull an image only when it isn't already local.
 - **Confidentiality**: The orb never takes registry credentials; `push` and `tag_digest` use the login already in your Docker config. Credentials embedded in an HTTP or HTTPS remote URL are kept off the git command line, redacted from the error output `generate_tags` prints, and held in a private `mktemp` directory that is removed when the step exits; shell tracing is off while it runs. Exported values are shell-quoted with `printf %q`, so no value can break or inject into later steps.
 - **Privacy**: No usage data of any kind is collected or shipped back to the orb developer.
 
@@ -417,11 +423,11 @@ Linux executors on any architecture, since the orb runs no binaries of its own; 
 | `tag`, `push` | `docker`, `podman` or `buildah` (`tool`). With Docker on a Docker executor, run `setup_remote_docker` first. |
 | `tag_digest` | `crane` |
 | `export_image_digest_ref` | `crane`, or `docker` |
-| `export_tag`, `export_image_ref` | Nothing beyond bash |
+| `export_tag`, `export_image_ref` | bash and `tee` |
 
 ## 🌐 Network Access
 
-Hosts to allow when running on a locked-down or self-hosted runner. The orb downloads nothing itself; these are the connections its commands make through `git`, your container tool and `crane`.
+Hosts to allow when running on a locked-down or self-hosted runner. The orb installs nothing; these are the connections its commands make through `git`, your container tool and `crane`.
 
 | Host | Needed by | Purpose |
 | --- | --- | --- |
