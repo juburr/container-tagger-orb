@@ -1,11 +1,13 @@
 description: >
   Tag a multi-platform image that is already in a registry, by digest, without pulling or pushing it.
   The tag and push commands handle one platform, so they would flatten a multi-platform index.
+  juburr/crane-orb installs crane, checked against a SHA-512 built into that orb, and logs in to the registry.
 
 usage:
   version: 2.1
 
   orbs:
+    crane: juburr/crane-orb@0.1.0
     tagger: juburr/container-tagger-orb@1.0.0
 
   jobs:
@@ -14,16 +16,12 @@ usage:
         - image: cimg/base:current-22.04
       steps:
         - checkout
-        - run:
-            name: Install crane
-            command: |
-              # Pin the version and verify the archive's checksum in practice.
-              curl -fsSL -o crane.tar.gz https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz
-              tar -xzf crane.tar.gz crane
-              sudo install -m 0755 crane /usr/local/bin/crane
-        - run:
-            name: Authenticate with GHCR
-            command: echo $GITHUB_TOKEN | crane auth login ghcr.io -u $GITHUB_USER --password-stdin
+        - crane/install:
+            version: "0.22.1"
+        - crane/login:
+            registry: ghcr.io
+            username: GITHUB_USER
+            password: GITHUB_TOKEN
         - tagger/generate_tags:
             tags_file: tags.txt
         - tagger/tag_digest:

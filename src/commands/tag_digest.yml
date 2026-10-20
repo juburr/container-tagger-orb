@@ -3,7 +3,8 @@ description: >
   without pulling or pushing image content. Use this for multi-platform images: the tag and push commands pull,
   retag, and push a single platform, which replaces a multi-platform index with one platform. Each tag's current
   digest is logged before writing, and every tag must resolve to the source digest afterwards.
-  Requires crane on PATH and registry credentials, for example from docker login.
+  Requires crane on PATH, for example from the juburr/crane-orb install command, and registry credentials, for
+  example from its login command or docker login.
 parameters:
   expected_digests_file:
     type: string
