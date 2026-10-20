@@ -252,6 +252,7 @@ For an image that is already in a registry, use `tag_digest`. It applies every t
 version: 2.1
 
 orbs:
+  crane: juburr/crane-orb@0.1.0
   tagger: juburr/container-tagger-orb@1.0.0
 
 jobs:
@@ -260,26 +261,12 @@ jobs:
       - image: cimg/base:current-22.04
     steps:
       - checkout
-      - run:
-          name: Install crane
-          command: |
-            # crane v0.22.1, pinned by the SHA-512 of each release archive.
-            case "$(uname -m)" in
-              x86_64)
-                arch=x86_64
-                sha512=ce98e3589992cc2381fca98c59dec3437c29de347109a6b919919daaabeb2ed11deac2bbc402739ddd8bec3edcb717e382aef301ffc8d2555d642118a949e68c ;;
-              aarch64|arm64)
-                arch=arm64
-                sha512=eae352c81297394b2e31bfd350545ba5fd281fe8a178e9abf38e2c88a88a01628d76708f1444195707874747457bef1c84e0b7b895a4b49fddc20c565dd03c16 ;;
-              *) echo "ERROR: no crane build is pinned here for $(uname -m)." >&2; exit 1 ;;
-            esac
-            curl -fsSL -o crane.tar.gz "https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_${arch}.tar.gz"
-            echo "${sha512}  crane.tar.gz" | sha512sum -c -
-            tar -xzf crane.tar.gz crane
-            sudo install -m 0755 crane /usr/local/bin/crane
-      - run:
-          name: Authenticate with GHCR
-          command: echo $GITHUB_TOKEN | crane auth login ghcr.io -u $GITHUB_USER --password-stdin
+      - crane/install:
+          version: "0.22.1"
+      - crane/login:
+          registry: ghcr.io
+          username: GITHUB_USER
+          password: GITHUB_TOKEN
       - tagger/generate_tags:
           tags_file: tags.txt
       - tagger/tag_digest:
@@ -300,7 +287,7 @@ workflows:
 ```
 
 How it behaves:
-- `crane` must be on `PATH`; this orb does not install it. Registry credentials come from the Docker config, so `docker login` (or `crane auth login`) works.
+- `crane` must be on `PATH`. This orb does not install it; [crane-orb](https://github.com/juburr/crane-orb)'s `install` does, as above, and checks the binary against a SHA-512 built into that orb. Registry credentials come from the Docker config, so crane-orb's `login`, `docker login` and `crane auth login` all work.
 - `image_digest_ref` must be `repository@sha256:<64 hex characters>`, and the tags are written to that same repository. `export_image_digest_ref` can produce it as `${IMAGE_DIGEST_REF}` when the registry reports a sha256 digest. To promote into another repository, copy by digest first, for example `crane copy src@sha256:... dst@sha256:...`.
 - Before writing, each tag's current digest is logged as `<tag> <sha256:...>` or `<tag> absent`.
 - `expected_digests_file` takes that same format, one line per tag in the tags file. If any tag no longer matches, no tag is written. Use it to make sure the tags you planned to move have not moved since. The check runs just before writing and is not atomic; registries have no conditional tag write.
@@ -347,7 +334,7 @@ Pushes `target_image:<tag>` for every tag in the tags file, from the local conta
 
 ### `tagger/tag_digest`
 
-Applies every tag in the tags file to an image that is already in a registry, without pulling or pushing it. Needs `crane` on `PATH` and registry credentials, for example from `docker login`. See [Multi-Platform Images](#-multi-platform-images).
+Applies every tag in the tags file to an image that is already in a registry, without pulling or pushing it. Needs `crane` on `PATH`, for example from [crane-orb](https://github.com/juburr/crane-orb)'s `install`, and registry credentials, for example from its `login` or `docker login`. See [Multi-Platform Images](#-multi-platform-images).
 
 | Parameter | Default | Description |
 | --- | --- | --- |
