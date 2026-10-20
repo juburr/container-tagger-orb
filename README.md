@@ -108,7 +108,7 @@ Build an image, generate its tags, and push every tag to GitHub Container Regist
 version: 2.1
 
 orbs:
-  tagger: juburr/container-tagger-orb@1.0.0
+  tagger: juburr/container-tagger-orb@1.0.1
 
 jobs:
   container_build:
@@ -253,7 +253,7 @@ version: 2.1
 
 orbs:
   crane: juburr/crane-orb@0.1.0
-  tagger: juburr/container-tagger-orb@1.0.0
+  tagger: juburr/container-tagger-orb@1.0.1
 
 jobs:
   promote:
