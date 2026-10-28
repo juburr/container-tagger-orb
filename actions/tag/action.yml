@@ -1,0 +1,53 @@
+name: Tag a container image
+description: >
+  Applies tags to a container image by using a tags file. Tags are applied in
+  a local container tool, which holds one platform of an image, and the source
+  is pulled first when it is not local. For a multi-platform image already in
+  a registry, use tag_digest instead: pushing a pulled image would replace the
+  multi-platform index with one platform. The GitHub Actions twin of the orb's
+  tag command.
+author: juburr
+
+inputs:
+  append_tags_to_source:
+    description: "Option to append each tag to the source images as well: true or false."
+    default: "false"
+  push:
+    description: "Option to push the newly tagged image to the container registry: true or false."
+    default: "false"
+  source_image:
+    description: The source image name.
+    required: true
+  tags_file:
+    description: >
+      Path of the file with the tags to apply, one per line, as written by
+      generate_tags. A leading ~/ is expanded to $HOME.
+    default: tags.txt
+  target_image:
+    description: The target image name.
+    required: true
+  tool:
+    description: "Container tool to use: buildah, docker, or podman."
+    default: docker
+
+runs:
+  using: composite
+  steps:
+    - name: Apply Tags To Container Image
+      shell: bash
+      env:
+        PARAM_APPEND_TAGS_TO_SOURCE: ${{ inputs.append_tags_to_source }}
+        PARAM_PUSH: ${{ inputs.push }}
+        PARAM_SOURCE_IMAGE: ${{ inputs.source_image }}
+        PARAM_TAGS_FILE: ${{ inputs.tags_file }}
+        PARAM_TARGET_IMAGE: ${{ inputs.target_image }}
+        PARAM_TOOL: ${{ inputs.tool }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/tag.sh"
+    - name: Push Tagged Images To Registry
+      if: inputs.push == 'true' || inputs.push == '1'
+      shell: bash
+      env:
+        PARAM_TAGS_FILE: ${{ inputs.tags_file }}
+        PARAM_TARGET_IMAGE: ${{ inputs.target_image }}
+        PARAM_TOOL: ${{ inputs.tool }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/push.sh"

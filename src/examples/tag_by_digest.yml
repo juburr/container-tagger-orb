@@ -8,7 +8,7 @@ usage:
 
   orbs:
     crane: juburr/crane-orb@0.1.0
-    tagger: juburr/container-tagger-orb@1.0.1
+    tagger: juburr/container-tagger-orb@1.1.0
 
   jobs:
     promote:

@@ -63,8 +63,19 @@ image_is_missing() {
     return 1
 }
 
-IMAGE_REF_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_REF_ENV_VAR}" | circleci env subst)
-IMAGE_DIGEST_REF_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_DIGEST_REF_ENV_VAR}" | circleci env subst)
+# subst VALUE: expands environment variables in VALUE with the CircleCI CLI,
+# which reads it on stdin. Without the CLI, as in GitHub Actions or a local
+# run, the value is used as it is.
+subst() {
+    if command -v circleci > /dev/null 2>&1; then
+        printf '%s' "$1" | circleci env subst
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+IMAGE_REF_ENV_VAR=$(subst "${PARAM_IMAGE_REF_ENV_VAR}")
+IMAGE_DIGEST_REF_ENV_VAR=$(subst "${PARAM_IMAGE_DIGEST_REF_ENV_VAR}")
 
 echo "Exporting the image digest reference environment variable..."
 echo "  IMAGE_REF_ENV_VAR: ${IMAGE_REF_ENV_VAR}"

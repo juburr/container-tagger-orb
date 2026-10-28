@@ -1,0 +1,31 @@
+name: Push tagged container images
+description: >
+  Pushes container images to a registry using a tags file. Each tag is pushed
+  from the local container tool, which holds one platform. For a
+  multi-platform image already in a registry, use tag_digest instead. The
+  GitHub Actions twin of the orb's push command.
+author: juburr
+
+inputs:
+  tags_file:
+    description: >
+      Path of the file with the tags to apply, one per line, as written by
+      generate_tags. A leading ~/ is expanded to $HOME.
+    default: tags.txt
+  target_image:
+    description: The target image name.
+    required: true
+  tool:
+    description: "Container tool to use: buildah, docker, or podman."
+    default: docker
+
+runs:
+  using: composite
+  steps:
+    - name: Push Tagged Images To Registry
+      shell: bash
+      env:
+        PARAM_TAGS_FILE: ${{ inputs.tags_file }}
+        PARAM_TARGET_IMAGE: ${{ inputs.target_image }}
+        PARAM_TOOL: ${{ inputs.tool }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/push.sh"

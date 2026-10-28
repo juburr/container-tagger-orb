@@ -108,7 +108,7 @@ run_tag() {
     printf '%s\n' "$@" > "$IMAGES"
   fi
   env PATH="${FAKE_BIN}:${ORIGINAL_PATH}" FAKE_CALLS="$CALLS" FAKE_IMAGES="$IMAGES" \
-    PARAM_APPEND_TAGS_TO_SOURCE="$append" PARAM_TAGS_FILE="${TMP}/tags.txt" \
+    PARAM_APPEND_TAGS_TO_SOURCE="$append" PARAM_PUSH=0 PARAM_TAGS_FILE="${TMP}/tags.txt" \
     PARAM_SOURCE_IMAGE="$SOURCE" PARAM_TARGET_IMAGE="$TARGET" PARAM_TOOL="$tool" \
     bash "$SCRIPT" > "${TMP}/run.log" 2>&1 || status=$?
   printf '%s' "$status"

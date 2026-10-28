@@ -1,0 +1,48 @@
+name: Generate container image tags
+description: >
+  Generates tags for a container image and writes them to a file, one per line:
+  1.2.3 and, for a final release that is the highest of its line, 1.2, 1 and
+  latest for a release tag; edge and <branch>-<sha> for the develop, main and
+  master branches; dev-<sha> for any other branch or pull request. A final
+  release reads tag names from the checkout and its remote (origin) before
+  publishing latest, major, or minor tags, so check out with the default
+  persisted credentials. The GitHub Actions twin of the orb's generate_tags
+  command.
+author: juburr
+
+inputs:
+  git_tag:
+    description: >
+      Optional git tag of the release, used instead of the workflow's tag for
+      releases that don't run for a tag, such as a variable an earlier step set
+      (env.RELEASE_TAG in an expression). When set, it is the only release
+      identity: it must be a supported release tag (with a git_tag_prefix, the
+      full <git_tag_prefix>/vX.Y.Z name), it must equal GITHUB_REF_NAME when
+      the workflow runs for a tag, and there is no fallback to edge or sha
+      tags. An empty value leaves it unset, so a release job should check the
+      value it passes. Leave empty to use GITHUB_REF_NAME.
+    default: ""
+  git_tag_prefix:
+    description: >
+      Optional git tag namespace prefix for monorepos, without a trailing
+      slash. For example, svc/auth matches git tags like svc/auth/v1.2.3, and
+      only tags in that namespace are compared. The generated container tags
+      never include the prefix: svc/auth/v1.2.3 produces 1.2.3, not
+      svc/auth/1.2.3. Leave empty for tags like v1.2.3.
+    default: ""
+  tags_file:
+    description: >
+      Path of the file to write the generated container tags to, one per line.
+      The file is created or truncated. A leading ~/ is expanded to $HOME.
+    default: tags.txt
+
+runs:
+  using: composite
+  steps:
+    - name: Generate Tags
+      shell: bash
+      env:
+        PARAM_GIT_TAG: ${{ inputs.git_tag }}
+        PARAM_GIT_TAG_PREFIX: ${{ inputs.git_tag_prefix }}
+        PARAM_TAGS_FILE: ${{ inputs.tags_file }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/generate_tags.sh"

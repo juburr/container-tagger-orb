@@ -1,0 +1,185 @@
+# Tests the GitHub Actions in actions/ on GitHub's own runners, as
+# .circleci/test-deploy.yml tests the orb's commands on CircleCI. Each job
+# runs the actions from this checkout (uses: ./actions/...), so a pull
+# request tests its own changes.
+name: GitHub Actions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the offline tests
+        run: |
+          for test in test/*_test.sh; do
+            # It needs a registry; the registry job runs it.
+            if [[ "${test}" == test/tag_digest_registry_test.sh ]]; then
+              continue
+            fi
+            echo "=== ${test}"
+            bash "${test}"
+          done
+
+  # generate_tags and export_tag on this run's own event: dev-<sha> for a pull
+  # request, edge and main-<sha> for a push to main, and the version for a
+  # release tag, whose earlier releases generate_tags reads from origin.
+  tags:
+    runs-on: ubuntu-24.04
+    steps:
+      # The default persisted credentials let git ls-remote read a private
+      # repository's tags.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./actions/generate_tags
+      - uses: ./actions/export_tag
+      - uses: ./actions/export_image_ref
+        with:
+          image: ghcr.io/juburr/tagger-test
+      - name: Verify the tags for this event
+        run: |
+          sha=${GITHUB_SHA:0:8}
+          case "${GITHUB_REF}" in
+            refs/tags/*) tag=${GITHUB_REF_NAME#v} ;;
+            refs/heads/main) tag=main-${sha} ;;
+            *) tag=dev-${sha} ;;
+          esac
+          echo "GITHUB_REF=${GITHUB_REF}, expecting ${tag}"
+          cat tags.txt
+          case "${GITHUB_REF}" in
+            refs/tags/*) [[ "$(sed -n 1p tags.txt)" == "${tag}" ]] ;;
+            refs/heads/main) [[ "$(cat tags.txt)" == "$(printf 'edge\n%s' "${tag}")" ]] ;;
+            *) [[ "$(cat tags.txt)" == "${tag}" ]] ;;
+          esac
+          [[ "${TAG}" == "${tag}" ]]
+          [[ "${IMAGE_REF}" == "ghcr.io/juburr/tagger-test:${tag}" ]]
+      # On a tag push, git_tag must match the pushed tag, so this release
+      # identity is checked on the other events.
+      - name: Set a release tag
+        if: github.ref_type != 'tag'
+        run: echo "RELEASE_TAG=v9.8.7-rc.1" >> "${GITHUB_ENV}"
+      - uses: ./actions/generate_tags
+        if: github.ref_type != 'tag'
+        with:
+          tags_file: ~/release-tags.txt
+          git_tag: ${{ env.RELEASE_TAG }}
+      - uses: ./actions/export_tag
+        if: github.ref_type != 'tag'
+        with:
+          git_tag: ${{ env.RELEASE_TAG }}
+          tag_env_var: GIT_TAG_RESULT
+      - name: Verify the git_tag results
+        if: github.ref_type != 'tag'
+        run: |
+          # tags_file: ~/release-tags.txt is written under $HOME.
+          [[ "$(cat "${HOME}/release-tags.txt")" == "9.8.7-rc.1" ]]
+          [[ "${GIT_TAG_RESULT}" == "9.8.7-rc.1" ]]
+      - id: not-release
+        if: github.ref_type != 'tag'
+        uses: ./actions/export_tag
+        continue-on-error: true
+        with:
+          git_tag: not-a-release
+      - name: Verify that a git_tag that isn't a release failed
+        if: github.ref_type != 'tag'
+        env:
+          OUTCOME: ${{ steps.not-release.outcome }}
+        run: '[[ "${OUTCOME}" == failure ]]'
+
+  # tag, push, export_image_digest_ref and tag_digest against a registry:2 on
+  # localhost:5000, which docker and crane reach over plain HTTP.
+  registry:
+    runs-on: ubuntu-24.04
+    env:
+      TARGET: localhost:5000/tagger-test/static
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start a registry
+        run: |
+          docker run -d --name registry -p 5000:5000 mirror.gcr.io/library/registry:2.8.3
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:5000/v2/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "The registry did not start."
+          docker logs registry
+          exit 1
+      - name: Prepare a local image and a tags file
+        run: |
+          docker pull gcr.io/distroless/static:latest
+          docker tag gcr.io/distroless/static:latest local/static
+          printf '1.2.3\n1.2\n' > tags.txt
+      - uses: ./actions/tag
+        with:
+          source_image: local/static
+          target_image: ${{ env.TARGET }}
+          push: "true"
+      - name: Prepare a second tags file
+        run: printf 'pushed\n' > push-tags.txt
+      - uses: ./actions/tag
+        with:
+          source_image: local/static
+          target_image: ${{ env.TARGET }}
+          tags_file: push-tags.txt
+      - uses: ./actions/push
+        with:
+          target_image: ${{ env.TARGET }}
+          tags_file: push-tags.txt
+      - name: Verify the registry has every tag
+        run: |
+          curl -fsS http://localhost:5000/v2/tagger-test/static/tags/list | tee tags.json
+          [[ "$(jq -c '.tags | sort' tags.json)" == '["1.2","1.2.3","pushed"]' ]]
+      - uses: juburr/crane-orb/actions/install@859ed4f6e4f5bd9d9cdbe0d1c54e433ab0487042 # v0.2.1
+      - name: Set the tag export_image_ref reads
+        run: echo "TAG=1.2.3" >> "${GITHUB_ENV}"
+      - uses: ./actions/export_image_ref
+        with:
+          image: ${{ env.TARGET }}
+      - uses: ./actions/export_image_digest_ref
+      - name: Verify the image digest reference
+        run: |
+          digest=$(crane digest "${TARGET}:1.2.3")
+          echo "IMAGE_DIGEST_REF=${IMAGE_DIGEST_REF}, crane digest ${digest}"
+          [[ "${IMAGE_DIGEST_REF}" == "${TARGET}@${digest}" ]]
+      - name: Prepare a promotion tags file
+        run: printf 'promoted\n' > promote-tags.txt
+      - uses: ./actions/tag_digest
+        with:
+          image_digest_ref: ${{ env.IMAGE_DIGEST_REF }}
+          tags_file: promote-tags.txt
+      - name: Verify the promoted tag
+        run: '[[ "${TARGET}@$(crane digest "${TARGET}:promoted")" == "${IMAGE_DIGEST_REF}" ]]'
+      - name: Run the tag_digest registry test
+        run: bash test/tag_digest_registry_test.sh
+      - id: unknown-tool
+        uses: ./actions/push
+        continue-on-error: true
+        with:
+          target_image: ${{ env.TARGET }}
+          tool: nerdctl
+      - name: Verify that an unknown tool failed
+        env:
+          OUTCOME: ${{ steps.unknown-tool.outcome }}
+        run: '[[ "${OUTCOME}" == failure ]]'

@@ -14,6 +14,11 @@
 
 set -euo pipefail
 
+# These cases set CircleCI's variables. On GitHub's runners, GITHUB_ACTIONS
+# would make the scripts read GitHub's instead (test/commands_test.sh covers
+# those), so clear it.
+unset GITHUB_ACTIONS
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${ROOT}/src/scripts/generate_tags.sh"
 ORIGINAL_PATH="${PATH}"

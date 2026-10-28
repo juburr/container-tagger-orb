@@ -1,0 +1,45 @@
+name: Tag a container image by digest
+description: >
+  Applies every tag in a tags file to an image that is already in a registry,
+  named as repository@sha256:digest, without pulling or pushing image content.
+  Use this for multi-platform images: the tag and push actions pull, retag, and
+  push a single platform, which replaces a multi-platform index with one
+  platform. Each tag's current digest is logged before writing, and every tag
+  must resolve to the source digest afterwards. Requires crane on the PATH, for
+  example from the juburr/crane-orb install action, and registry credentials,
+  for example from its login action or docker login. The GitHub Actions twin of
+  the orb's tag_digest command.
+author: juburr
+
+inputs:
+  expected_digests_file:
+    description: >
+      Optional path of a file with one "<tag> <sha256:digest>" or
+      "<tag> absent" line for every tag in tags_file. If any tag currently
+      points elsewhere, no tag is written. The check runs just before writing
+      and is not atomic. A leading ~/ is expanded to $HOME.
+    default: ""
+  image_digest_ref:
+    description: >
+      Image digest reference of the image to tag,
+      REPOSITORY@sha256:<64 hex characters>, for example
+      ghcr.io/org/app@sha256:..., or the IMAGE_DIGEST_REF variable from
+      export_image_digest_ref (env.IMAGE_DIGEST_REF in an expression). A tag is
+      not accepted. The tags are written to this repository.
+    required: true
+  tags_file:
+    description: >
+      Path of the file with the tags to apply, one per line, as written by
+      generate_tags. A leading ~/ is expanded to $HOME.
+    default: tags.txt
+
+runs:
+  using: composite
+  steps:
+    - name: Apply Tags To Image Digest In Registry
+      shell: bash
+      env:
+        PARAM_EXPECTED_DIGESTS_FILE: ${{ inputs.expected_digests_file }}
+        PARAM_IMAGE_DIGEST_REF: ${{ inputs.image_digest_ref }}
+        PARAM_TAGS_FILE: ${{ inputs.tags_file }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/tag_digest.sh"

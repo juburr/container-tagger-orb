@@ -2,12 +2,46 @@
 
 set -euo pipefail
 
+# subst VALUE: expands environment variables in VALUE with the CircleCI CLI,
+# which reads it on stdin. Without the CLI, as in GitHub Actions or a local
+# run, the value is used as it is.
+subst() {
+    if command -v circleci > /dev/null 2>&1; then
+        printf '%s' "$1" | circleci env subst
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
 # Read command arguments
 APPEND_TAGS_TO_SOURCE="${PARAM_APPEND_TAGS_TO_SOURCE}"
-TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
-SOURCE_IMAGE=$(printf '%s' "${PARAM_SOURCE_IMAGE}" | circleci env subst)
-TARGET_IMAGE=$(printf '%s' "${PARAM_TARGET_IMAGE}" | circleci env subst)
+TAGS_FILE=$(subst "${PARAM_TAGS_FILE}")
+SOURCE_IMAGE=$(subst "${PARAM_SOURCE_IMAGE}")
+TARGET_IMAGE=$(subst "${PARAM_TARGET_IMAGE}")
 TOOL="${PARAM_TOOL}"
+PUSH="${PARAM_PUSH}"
+
+# CircleCI checks the command's enum and booleans before the step runs, and
+# passes a boolean as 1 or 0; the GitHub Action passes any string, and true or
+# false.
+case "${TOOL}" in
+    buildah | docker | podman) ;;
+    *)
+        echo "ERROR: tool must be buildah, docker, or podman, not '${TOOL}'." >&2
+        exit 1
+        ;;
+esac
+# push itself is run by the next step; it is checked here so a value that is
+# neither true nor false fails rather than skipping the push.
+for name in append_tags_to_source:"${APPEND_TAGS_TO_SOURCE}" push:"${PUSH}"; do
+    case "${name#*:}" in
+        1 | true | 0 | false) ;;
+        *)
+            echo "ERROR: ${name%%:*} must be true or false, not '${name#*:}'." >&2
+            exit 1
+            ;;
+    esac
+done
 
 # The shell expands ~ only in words it parses itself, so a parameter value such
 # as ~/workspace/tags.txt arrives with a literal ~. Expand ~ and ~/ the way a
@@ -53,7 +87,7 @@ fi
 # Apply all tags
 while read -r TAG; do
     INNER_SOURCE_IMAGE="${SOURCE_IMAGE}"
-    if [[ "${APPEND_TAGS_TO_SOURCE}" == "1" ]]; then
+    if [[ "${APPEND_TAGS_TO_SOURCE}" == "1" || "${APPEND_TAGS_TO_SOURCE}" == "true" ]]; then
         INNER_SOURCE_IMAGE="${SOURCE_IMAGE}:${TAG}"
     fi
 

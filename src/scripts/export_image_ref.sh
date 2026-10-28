@@ -9,10 +9,30 @@ set -euo pipefail
 # Handle Input 
 # ==========================================
 
+# subst VALUE: expands environment variables in VALUE with the CircleCI CLI,
+# which reads it on stdin. Without the CLI, as in GitHub Actions or a local
+# run, the value is used as it is.
+subst() {
+    if command -v circleci > /dev/null 2>&1; then
+        printf '%s' "$1" | circleci env subst
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
 # Read command arguments
-IMAGE=$(printf '%s' "${PARAM_IMAGE}" | circleci env subst)
-IMAGE_REF_ENV_VAR=$(printf '%s' "${PARAM_IMAGE_REF_ENV_VAR}" | circleci env subst)
-TAG_ENV_VAR=$(printf '%s' "${PARAM_TAG_ENV_VAR}" | circleci env subst)
+IMAGE=$(subst "${PARAM_IMAGE}")
+IMAGE_REF_ENV_VAR=$(subst "${PARAM_IMAGE_REF_ENV_VAR}")
+TAG_ENV_VAR=$(subst "${PARAM_TAG_ENV_VAR}")
+
+# CircleCI checks env_var_name parameters before the step runs; the GitHub
+# Action passes any string.
+for name in image_ref_env_var:"${IMAGE_REF_ENV_VAR}" tag_env_var:"${TAG_ENV_VAR}"; do
+    if [[ -n "${name#*:}" && ! "${name#*:}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "ERROR: ${name%%:*} must be the name of an environment variable, not '${name#*:}'." >&2
+        exit 1
+    fi
+done
 
 # Print arguments for debugging purposes
 echo "Exporting the image reference environment variable..."
