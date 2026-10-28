@@ -130,7 +130,7 @@ check_tag_and_push() {
 
   status="$(run_in_work tag.sh \
     PARAM_TAGS_FILE='~/workspace/tags.txt' PARAM_SOURCE_IMAGE="local" \
-    PARAM_TARGET_IMAGE="${REPO}" PARAM_TOOL="docker" PARAM_APPEND_TAGS_TO_SOURCE="0")"
+    PARAM_TARGET_IMAGE="${REPO}" PARAM_TOOL="docker" PARAM_APPEND_TAGS_TO_SOURCE="0" PARAM_PUSH="0")"
   if [[ "$status" -ne 0 ]]; then
     fail_case "tag reads ~/workspace/tags.txt" "exit ${status}" "$(cat "${TMP}/run.log")"
   elif ! grep -Fx "docker tag local ${REPO}:1.2.3" "$CALLS" > /dev/null ||
@@ -154,7 +154,7 @@ check_tag_and_push() {
   # ~ alone is $HOME, which is a directory rather than a tags file.
   status="$(run_in_work tag.sh \
     PARAM_TAGS_FILE='~' PARAM_SOURCE_IMAGE="local" \
-    PARAM_TARGET_IMAGE="${REPO}" PARAM_TOOL="docker" PARAM_APPEND_TAGS_TO_SOURCE="0")"
+    PARAM_TARGET_IMAGE="${REPO}" PARAM_TOOL="docker" PARAM_APPEND_TAGS_TO_SOURCE="0" PARAM_PUSH="0")"
   if [[ "$status" -eq 0 ]] || ! grep -Fx "ERROR: Unable to find tags file: ${FAKE_HOME}" "${TMP}/run.log" > /dev/null; then
     fail_case "~ alone is expanded to \$HOME" "exit ${status}" "$(cat "${TMP}/run.log")"
   else

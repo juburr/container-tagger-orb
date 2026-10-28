@@ -5,7 +5,7 @@ usage:
   version: 2.1
 
   orbs:
-    tagger: juburr/container-tagger-orb@1.0.1
+    tagger: juburr/container-tagger-orb@1.1.0
 
   parameters:
     docker_version:

@@ -2,10 +2,31 @@
 
 set -euo pipefail
 
+# subst VALUE: expands environment variables in VALUE with the CircleCI CLI,
+# which reads it on stdin. Without the CLI, as in GitHub Actions or a local
+# run, the value is used as it is.
+subst() {
+    if command -v circleci > /dev/null 2>&1; then
+        printf '%s' "$1" | circleci env subst
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
 # Read command arguments
-TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
-TARGET_IMAGE=$(printf '%s' "${PARAM_TARGET_IMAGE}" | circleci env subst)
+TAGS_FILE=$(subst "${PARAM_TAGS_FILE}")
+TARGET_IMAGE=$(subst "${PARAM_TARGET_IMAGE}")
 TOOL="${PARAM_TOOL}"
+
+# CircleCI checks the command's enum before the step runs; the GitHub
+# Action passes any string.
+case "${TOOL}" in
+    buildah | docker | podman) ;;
+    *)
+        echo "ERROR: tool must be buildah, docker, or podman, not '${TOOL}'." >&2
+        exit 1
+        ;;
+esac
 
 # The shell expands ~ only in words it parses itself, so a parameter value such
 # as ~/workspace/tags.txt arrives with a literal ~. Expand ~ and ~/ the way a

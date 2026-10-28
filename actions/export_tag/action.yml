@@ -1,0 +1,43 @@
+name: Export the most specific container tag
+description: >
+  Exports the most specific container tag for this build, such as 1.2.3,
+  main-<sha>, or dev-<sha>, to an environment variable for later steps in the
+  job. It is chosen with the same rules as the generate_tags action. The
+  GitHub Actions twin of the orb's export_tag command.
+author: juburr
+
+inputs:
+  git_tag:
+    description: >
+      Optional git tag of the release, used instead of the workflow's tag for
+      releases that don't run for a tag, such as a variable an earlier step set
+      (env.RELEASE_TAG in an expression). Same rules as generate_tags: when
+      set, it is the only release identity, it must equal GITHUB_REF_NAME when
+      the workflow runs for a tag, and there is no fallback to sha tags. An
+      empty value leaves it unset, so a release job should check the value it
+      passes. Leave empty to use GITHUB_REF_NAME.
+    default: ""
+  git_tag_prefix:
+    description: >
+      Optional git tag namespace prefix for monorepos, without a trailing
+      slash. For example, svc/auth matches git tags like svc/auth/v1.2.3. The
+      exported container tag never includes the prefix: svc/auth/v1.2.3
+      exports 1.2.3. Leave empty for tags like v1.2.3.
+    default: ""
+  tag_env_var:
+    description: >
+      Output: name of the environment variable to write the tag to, for
+      example TAG=1.2.3. Later steps in the job can read it. export_image_ref
+      reads it.
+    default: TAG
+
+runs:
+  using: composite
+  steps:
+    - name: Export Tag Environment Variable
+      shell: bash
+      env:
+        PARAM_GIT_TAG: ${{ inputs.git_tag }}
+        PARAM_GIT_TAG_PREFIX: ${{ inputs.git_tag_prefix }}
+        PARAM_TAG_ENV_VAR: ${{ inputs.tag_env_var }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/export_tag.sh"

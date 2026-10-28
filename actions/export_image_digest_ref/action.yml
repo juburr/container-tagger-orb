@@ -1,0 +1,34 @@
+name: Export a container image digest reference
+description: >
+  Exports an image digest reference, <repository>@<digest>, for example
+  ghcr.io/org/repo@sha256:..., to an environment variable for later steps in
+  the job. The digest is read from the registry for the image reference that
+  export_image_ref wrote, with crane when it is on the PATH and otherwise from
+  docker's RepoDigests. Fails when that digest cannot be read. A registry port
+  stays part of the name. The GitHub Actions twin of the orb's
+  export_image_digest_ref command.
+author: juburr
+
+inputs:
+  image_digest_ref_env_var:
+    description: >
+      Output: name of the environment variable to write the image digest
+      reference, <repository>@<digest>, to. Later steps in the job can read
+      it, and pass it to tag_digest as image_digest_ref
+      (env.IMAGE_DIGEST_REF in an expression).
+    default: IMAGE_DIGEST_REF
+  image_ref_env_var:
+    description: >
+      Input: name of the environment variable that already holds the image
+      reference, <image>:<tag>, as written by export_image_ref.
+    default: IMAGE_REF
+
+runs:
+  using: composite
+  steps:
+    - name: Export Image Digest Reference Environment Variable
+      shell: bash
+      env:
+        PARAM_IMAGE_DIGEST_REF_ENV_VAR: ${{ inputs.image_digest_ref_env_var }}
+        PARAM_IMAGE_REF_ENV_VAR: ${{ inputs.image_ref_env_var }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/export_image_digest_ref.sh"

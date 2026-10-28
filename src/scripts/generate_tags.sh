@@ -4,11 +4,57 @@ set -euo pipefail
 # A job can turn xtrace on for every step (SHELLOPTS, or set -x in $BASH_ENV), and it would print the remote URL's credentials.
 set +o xtrace
 
+# subst VALUE: expands environment variables in VALUE with the CircleCI CLI,
+# which reads it on stdin. Without the CLI, as in GitHub Actions or a local
+# run, the value is used as it is.
+subst() {
+    if command -v circleci > /dev/null 2>&1; then
+        printf '%s' "$1" | circleci env subst
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
 # Read command arguments
-TAGS_FILE=$(printf '%s' "${PARAM_TAGS_FILE}" | circleci env subst)
-GIT_TAG_PREFIX=$(printf '%s' "${PARAM_GIT_TAG_PREFIX}" | circleci env subst)
+TAGS_FILE=$(subst "${PARAM_TAGS_FILE}")
+GIT_TAG_PREFIX=$(subst "${PARAM_GIT_TAG_PREFIX}")
 GIT_TAG_PARAM="${PARAM_GIT_TAG-}"
-GIT_TAG=$(printf '%s' "${GIT_TAG_PARAM}" | circleci env subst)
+GIT_TAG=$(subst "${GIT_TAG_PARAM}")
+
+# The build's git tag, branch, and commit, and the variables they come from,
+# which messages name: CIRCLE_TAG, CIRCLE_BRANCH, and CIRCLE_SHA1 on CircleCI.
+# On GitHub Actions, GITHUB_REF_NAME is a tag when GITHUB_REF is refs/tags/...,
+# and a branch otherwise. A pull request is never a trunk build: its
+# GITHUB_REF_NAME is <number>/merge, but on pull_request_target it is the base
+# branch, so GITHUB_HEAD_REF, which only pull requests set, rules it out.
+BUILD_TAG="${CIRCLE_TAG:-}"
+BUILD_TAG_VAR="CIRCLE_TAG"
+BUILD_BRANCH="${CIRCLE_BRANCH:-}"
+BUILD_BRANCH_VAR="CIRCLE_BRANCH"
+BUILD_REF_VARS="CIRCLE_TAG, CIRCLE_BRANCH"
+BUILD_REF_VARS_UNUSED="CIRCLE_TAG and CIRCLE_BRANCH are not used."
+BUILD_SHA="${CIRCLE_SHA1:-}"
+PULL_REQUEST_BRANCH=""
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    BUILD_TAG=""
+    BUILD_BRANCH=""
+    case "${GITHUB_REF:-}" in
+        refs/tags/*) BUILD_TAG="${GITHUB_REF_NAME:-}" ;;
+        *) BUILD_BRANCH="${GITHUB_REF_NAME:-}" ;;
+    esac
+    BUILD_TAG_VAR="GITHUB_REF_NAME"
+    BUILD_BRANCH_VAR="GITHUB_REF_NAME"
+    BUILD_REF_VARS="GITHUB_REF_NAME"
+    BUILD_REF_VARS_UNUSED="GITHUB_REF_NAME is not used."
+    BUILD_SHA="${GITHUB_SHA:-}"
+    PULL_REQUEST_BRANCH="${GITHUB_HEAD_REF:-}"
+fi
+TRUNK_BUILD=0
+if [[ -z "${PULL_REQUEST_BRANCH}" ]]; then
+    case "${BUILD_BRANCH}" in
+        develop | main | master) TRUNK_BUILD=1 ;;
+    esac
+fi
 
 # The shell expands ~ only in words it parses itself, so a parameter value such
 # as ~/workspace/tags.txt arrives with a literal ~. Expand ~ and ~/ the way a
@@ -20,10 +66,17 @@ esac
 
 # Print arguments for debugging purposes
 echo "Input arguments for tag generation command:"
-echo "  CIRCLE_BRANCH: ${CIRCLE_BRANCH:-}"
-echo "  CIRCLE_BUILD_NUM: ${CIRCLE_BUILD_NUM:-}"
-echo "  CIRCLE_SHA1: ${CIRCLE_SHA1:-}"
-echo "  CIRCLE_TAG: ${CIRCLE_TAG:-}"
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    echo "  GITHUB_REF: ${GITHUB_REF:-}"
+    echo "  GITHUB_REF_NAME: ${GITHUB_REF_NAME:-}"
+    echo "  GITHUB_HEAD_REF: ${GITHUB_HEAD_REF:-}"
+    echo "  GITHUB_SHA: ${GITHUB_SHA:-}"
+else
+    echo "  CIRCLE_BRANCH: ${CIRCLE_BRANCH:-}"
+    echo "  CIRCLE_BUILD_NUM: ${CIRCLE_BUILD_NUM:-}"
+    echo "  CIRCLE_SHA1: ${CIRCLE_SHA1:-}"
+    echo "  CIRCLE_TAG: ${CIRCLE_TAG:-}"
+fi
 echo "  TAGS_FILE: ${TAGS_FILE}"
 echo "  GIT_TAG_PREFIX: ${GIT_TAG_PREFIX}"
 echo "  GIT_TAG: ${GIT_TAG}"
@@ -39,7 +92,7 @@ RELEASE_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([0-9]+|\.[0-9]+)?)?$'
 RELEASE_TAG_HELP="Expected vMAJOR.MINOR.PATCH with an optional -alpha, -beta, or -rc suffix, for example v2.0.0, v2.0.0-rc1, v2.0.0-rc, or v2.0.0-rc.1."
 
 # Pick the release identity. A set git_tag is the only identity: it must be a
-# supported release tag, and nothing falls back to CIRCLE_TAG, CIRCLE_BRANCH,
+# supported release tag, and nothing falls back to the build's tag or branch,
 # edge, or a sha tag. With a git_tag_prefix it must be the full tag name,
 # <prefix>/vX.Y.Z, because vX.Y.Z and <prefix>/vX.Y.Z are different git tags.
 # A parameter that was set but expanded to nothing, such as ${RELEASE_TAG} when
@@ -49,11 +102,11 @@ IDENTITY_SOURCE=""
 if [[ -n "${GIT_TAG_PARAM}" ]]; then
     if [[ -z "${GIT_TAG}" ]]; then
         echo "ERROR: git_tag '${GIT_TAG_PARAM}' expanded to an empty value." >&2
-        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags." >&2
+        echo "Refusing to fall back to ${BUILD_REF_VARS}, edge, or dev tags." >&2
         exit 1
     fi
-    if [[ -n "${CIRCLE_TAG:-}" && "${CIRCLE_TAG}" != "${GIT_TAG}" ]]; then
-        echo "ERROR: git_tag '${GIT_TAG}' does not match CIRCLE_TAG '${CIRCLE_TAG}'." >&2
+    if [[ -n "${BUILD_TAG}" && "${BUILD_TAG}" != "${GIT_TAG}" ]]; then
+        echo "ERROR: git_tag '${GIT_TAG}' does not match ${BUILD_TAG_VAR} '${BUILD_TAG}'." >&2
         echo "Refusing to choose between two release identities." >&2
         exit 1
     fi
@@ -61,7 +114,7 @@ if [[ -n "${GIT_TAG_PARAM}" ]]; then
         if [[ "${GIT_TAG}" != "${GIT_TAG_PREFIX}/"* ]]; then
             echo "ERROR: git_tag '${GIT_TAG}' is not in the git_tag_prefix '${GIT_TAG_PREFIX}' namespace." >&2
             echo "With a git_tag_prefix, git_tag must be the full tag name, ${GIT_TAG_PREFIX}/vMAJOR.MINOR.PATCH." >&2
-            echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags." >&2
+            echo "Refusing to fall back to ${BUILD_REF_VARS}, edge, or dev tags." >&2
             exit 1
         fi
         TAG="${GIT_TAG#"${GIT_TAG_PREFIX}/"}"
@@ -71,23 +124,26 @@ if [[ -n "${GIT_TAG_PARAM}" ]]; then
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
         echo "ERROR: git_tag '${GIT_TAG}' is not a supported release tag." >&2
         echo "${RELEASE_TAG_HELP}" >&2
-        echo "Refusing to fall back to CIRCLE_TAG, CIRCLE_BRANCH, edge, or dev tags." >&2
+        echo "Refusing to fall back to ${BUILD_REF_VARS}, edge, or dev tags." >&2
         exit 1
     fi
     IDENTITY_SOURCE="git_tag"
-    echo "Release identity: git_tag '${GIT_TAG}'. CIRCLE_TAG and CIRCLE_BRANCH are not used."
-elif [[ -n "${CIRCLE_TAG:-}" ]]; then
-    TAG="${CIRCLE_TAG#"${GIT_TAG_PREFIX}/"}"
+    echo "Release identity: git_tag '${GIT_TAG}'. ${BUILD_REF_VARS_UNUSED}"
+elif [[ -n "${BUILD_TAG}" ]]; then
+    TAG="${BUILD_TAG#"${GIT_TAG_PREFIX}/"}"
     if [[ ! "${TAG}" =~ $RELEASE_TAG_RE ]]; then
-        echo "ERROR: CIRCLE_TAG '${CIRCLE_TAG}' is not a supported release tag." >&2
+        echo "ERROR: ${BUILD_TAG_VAR} '${BUILD_TAG}' is not a supported release tag." >&2
         echo "${RELEASE_TAG_HELP}" >&2
         echo "Refusing to publish a dev or edge tag for this tag." >&2
         exit 1
     fi
-    IDENTITY_SOURCE="CIRCLE_TAG"
-    echo "Release identity: CIRCLE_TAG '${CIRCLE_TAG}'."
+    IDENTITY_SOURCE="${BUILD_TAG_VAR}"
+    echo "Release identity: ${BUILD_TAG_VAR} '${BUILD_TAG}'."
 else
-    echo "Release identity: none. CIRCLE_BRANCH '${CIRCLE_BRANCH:-}' selects edge or dev tags."
+    echo "Release identity: none. ${BUILD_BRANCH_VAR} '${BUILD_BRANCH}' selects edge or dev tags."
+    if [[ -n "${PULL_REQUEST_BRANCH}" ]]; then
+        echo "GITHUB_HEAD_REF '${PULL_REQUEST_BRANCH}' is set, so this is a pull request, which gets a dev tag."
+    fi
 fi
 echo ""
 
@@ -625,7 +681,7 @@ prefix_final_versions() {
 }
 
 echo "Generating tags:"
-SHORT_REVISION=$(echo "${CIRCLE_SHA1:-}" | cut -c 1-8)
+SHORT_REVISION=$(echo "${BUILD_SHA}" | cut -c 1-8)
 echo "  SHORT_REVISION: ${SHORT_REVISION}"
 echo "  TAG: ${TAG}"
 
@@ -692,11 +748,11 @@ if [[ -n "${IDENTITY_SOURCE}" ]]; then
     else
         echo "  This is a pre-release. Not creating latest, major, or minor tags."
     fi
-elif [ "${CIRCLE_BRANCH:-}" = develop ] || [ "${CIRCLE_BRANCH:-}" = main ] || [ "${CIRCLE_BRANCH:-}" = master ]; then
-    echo "  Processing as a merged pull request. The CIRCLE_BRANCH was set to a known trunk branch."
+elif [[ "${TRUNK_BUILD}" -eq 1 ]]; then
+    echo "  Processing as a merged pull request. The ${BUILD_BRANCH_VAR} was set to a known trunk branch."
     echo "edge" >> "${TAGS_FILE}"
-    echo "${CIRCLE_BRANCH}-${SHORT_REVISION}" >> "${TAGS_FILE}"
-    echo "  Added tag to output file: ${CIRCLE_BRANCH}-${SHORT_REVISION}"
+    echo "${BUILD_BRANCH}-${SHORT_REVISION}" >> "${TAGS_FILE}"
+    echo "  Added tag to output file: ${BUILD_BRANCH}-${SHORT_REVISION}"
 else
     echo "  Processing as a commit to a development branch."
     echo "dev-${SHORT_REVISION}" >> "${TAGS_FILE}"

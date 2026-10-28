@@ -31,6 +31,7 @@ steps:
   - run:
       environment:
         PARAM_APPEND_TAGS_TO_SOURCE: << parameters.append_tags_to_source >>
+        PARAM_PUSH: << parameters.push >>
         PARAM_SOURCE_IMAGE: << parameters.source_image >>
         PARAM_TAGS_FILE: << parameters.tags_file >>
         PARAM_TARGET_IMAGE: << parameters.target_image >>
