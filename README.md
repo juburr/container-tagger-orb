@@ -110,7 +110,7 @@ Build an image, generate its tags, and push every tag to GitHub Container Regist
 version: 2.1
 
 orbs:
-  tagger: juburr/container-tagger-orb@1.1.0
+  tagger: juburr/container-tagger-orb@1.1.1
 
 jobs:
   container_build:
@@ -166,8 +166,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build Docker Container
         run: docker build -t localimage .
-      - uses: juburr/container-tagger-orb/actions/generate_tags@v1.1.0
-      - uses: juburr/container-tagger-orb/actions/tag@v1.1.0
+      - uses: juburr/container-tagger-orb/actions/generate_tags@v1.1.1
+      - uses: juburr/container-tagger-orb/actions/tag@v1.1.1
         with:
           source_image: localimage
           target_image: ghcr.io/org/repo/image
@@ -175,7 +175,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s\n' "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-      - uses: juburr/container-tagger-orb/actions/push@v1.1.0
+      - uses: juburr/container-tagger-orb/actions/push@v1.1.1
         with:
           target_image: ghcr.io/org/repo/image
       - name: Logout from GHCR
@@ -292,8 +292,8 @@ For an image that is already in a registry, use `tag_digest`. It applies every t
 version: 2.1
 
 orbs:
-  crane: juburr/crane-orb@0.1.0
-  tagger: juburr/container-tagger-orb@1.1.0
+  crane: juburr/crane-orb@0.2.1
+  tagger: juburr/container-tagger-orb@1.1.1
 
 jobs:
   promote:
@@ -338,8 +338,8 @@ On GitHub Actions, crane-orb's actions install crane and log in:
           REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
           registry: ghcr.io
-      - uses: juburr/container-tagger-orb/actions/generate_tags@v1.1.0
-      - uses: juburr/container-tagger-orb/actions/tag_digest@v1.1.0
+      - uses: juburr/container-tagger-orb/actions/generate_tags@v1.1.1
+      - uses: juburr/container-tagger-orb/actions/tag_digest@v1.1.1
         with:
           image_digest_ref: ghcr.io/org/repo/image@${{ env.BUILD_DIGEST }}
 ```
@@ -447,7 +447,7 @@ Each of the orb's commands has a GitHub Action of the same name. The actions run
 
 The [Quick Start](#-quick-start) shows a complete workflow. How the actions differ from the orb's commands:
 
-- **Versions.** An action is referenced by the repository's release tag, such as `v1.1.0`, the same tag the orb is published from. There is no moving major tag such as `v1` yet. For the strongest pinning, use the tag's commit SHA: `juburr/container-tagger-orb/actions/tag@<sha> # v1.1.0`.
+- **Versions.** An action is referenced by the repository's release tag, such as `v1.1.1`, the same tag the orb is published from. There is no moving major tag such as `v1` yet. For the strongest pinning, use the tag's commit SHA: `juburr/container-tagger-orb/actions/tag@<sha> # v1.1.1`.
 - **The build's tag and branch.** `generate_tags` and `export_tag` read `GITHUB_REF_NAME`, which is a release tag when `GITHUB_REF` is `refs/tags/...` and a branch otherwise, and take the commit for `<branch>-<sha>` and `dev-<sha>` from `GITHUB_SHA`. A pull request is never a trunk build: with `GITHUB_HEAD_REF` set, it gets `dev-<sha>`, even on `pull_request_target`, where `GITHUB_REF_NAME` is the base branch.
 - **Existing release tags.** A final release reads the remote's tag names with `git ls-remote`, using the credentials `actions/checkout` keeps by default. Without them, a private repository's final release fails.
 - **Environment variables.** The orb expands `$NAME` in its string parameters with the CircleCI CLI, which GitHub's runners don't have, so the actions take values as they are. Use GitHub's expressions instead, such as `git_tag: ${{ env.RELEASE_TAG }}`. An expression that comes out empty leaves `git_tag` unset, so check it first. A leading `~/` in a path is still the home directory.
@@ -459,6 +459,8 @@ The [Quick Start](#-quick-start) shows a complete workflow. How the actions diff
 The actions are composite actions in [`actions/`](actions), next to the orb's source, and use no other actions. Each passes its inputs to the orb's script as environment variables, and [`actions/run_script.sh`](actions/run_script.sh) gives the script what CircleCI would: a `BASH_ENV` file for the values it hands to later steps, which it then passes on through `GITHUB_ENV`.
 
 ## 📦 Upgrading
+
+Upgrading from v1.1.0 to v1.1.1? Nothing changes for pipelines or workflows: v1.1.1 only moves crane-orb in the [Multi-Platform Images](#-multi-platform-images) example and the [`tag_by_digest`](src/examples/tag_by_digest.yml) example to its current release, 0.2.1, whose `install` and `login` take the same parameters as 0.1.0.
 
 Upgrading from v1.0.1 to v1.1.0? Nothing changes for CircleCI pipelines: v1.1.0 adds [GitHub Actions](#-github-actions) for every command. The command scripts now also run without the CircleCI CLI, using values as they are.
 
