@@ -1,7 +1,7 @@
 version: 2.1
 setup: true
 orbs:
-  crane: juburr/crane-orb@0.1.0
+  crane: juburr/crane-orb@0.2.1
   orb-tools: circleci/orb-tools@12.5
   shellcheck: circleci/shellcheck@3.4
 
